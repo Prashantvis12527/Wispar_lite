@@ -179,6 +179,11 @@ final class App: NSObject, NSApplicationDelegate {
             do {
                 var text = try await Groq.transcribe(wav: wav)
                 let raw = text
+                if Vocabulary.isPromptEcho(text) {   // Whisper echoed its vocabulary hint: nothing was really said
+                    Debug.log(peak: peak, raw: raw, cleaned: "(dropped: prompt echo)")
+                    await MainActor.run { self.setIcon("mic") }
+                    return
+                }
                 if !text.isEmpty && cleanup {
                     text = (try? await Groq.cleanup(text)) ?? text   // fall back to raw on failure
                 }
@@ -354,6 +359,14 @@ enum Debug {
 
     static func saveLast(_ wav: Data) {
         try? wav.write(to: dir.appendingPathComponent("last.wav"))
+    }
+
+    static func note(_ msg: String) {
+        let url = dir.appendingPathComponent("log.txt")
+        let line = "  \(msg)\n"
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
+        }
     }
 
     static func log(peak: Int, raw: String, cleaned: String) {
