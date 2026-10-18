@@ -58,8 +58,21 @@ final class App: NSObject, NSApplicationDelegate {
         if Keychain.load() == nil { setKey() }
     }
 
+    /// Idle ("mic") shows the WisprLite glyph; recording and processing keep system symbols as state feedback.
+    private lazy var logoGlyph: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "menubar", withExtension: "png"),
+              let img = NSImage(contentsOf: url) else { return nil }
+        img.size = NSSize(width: 18, height: 18)
+        img.isTemplate = true
+        return img
+    }()
+
     private func setIcon(_ symbol: String) {
-        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        if symbol == "mic", let glyph = logoGlyph {
+            statusItem.button?.image = glyph
+        } else {
+            statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        }
     }
 
     private func startRecording() {

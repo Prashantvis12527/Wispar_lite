@@ -78,16 +78,24 @@ The Llama prompt adds punctuation and capitalization, removes filler words (um, 
 ```
 wispar_flow/
   Package.swift              SwiftPM manifest (one executable target, macOS 14+)
-  build.sh                   builds release binary, creates WisprLite.app, writes Info.plist, signs it
+  build.sh                   builds release binary, creates WisprLite.app, builds AppIcon.icns, writes Info.plist, signs it
   CLAUDE.md                  this file (project overview for AI assistants)
+  Assets/                    logo: make_icon.swift draws icon_1024.png and the menubar glyph (re-run: swift Assets/make_icon.swift Assets)
   Sources/WisprLite/
-    main.swift               App delegate, menu bar, permissions, orchestration, Debug logging
+    main.swift               App delegate, menu bar (logo glyph + state icons), permissions, orchestration, Debug logging
     Hotkey.swift             global Right Option hold / double-tap detection
     Recorder.swift           mic capture -> 16 kHz mono WAV, peak level
     Groq.swift               Groq Whisper + Llama calls, Vocabulary
     Paster.swift             clipboard-safe Cmd+V paste
     Keychain.swift           API key storage and lookup
 ```
+
+## Logo and icons
+
+- **Design:** a sky-to-indigo rounded square with five white sound-wave bars that thin out and fade to the right, plus a few floating specks. It is meant to suggest lightness: sound dissolving into air.
+- **Source:** `Assets/make_icon.swift` draws everything with CoreGraphics (no image tools needed). Run `swift Assets/make_icon.swift Assets` to regenerate `icon_1024.png`, `menubar.png` and `menubar@2x.png`, then `./build.sh`.
+- **App icon:** `build.sh` resizes `icon_1024.png` with `sips`, builds `AppIcon.icns` with `iconutil` into `Contents/Resources`, and `Info.plist` points to it via `CFBundleIconFile`.
+- **Menu bar:** idle state shows the bundled `menubar.png` (template image, adapts to light/dark). Recording (`mic.fill`) and processing (`ellipsis.circle`) still use SF Symbols as state feedback. See `setIcon` in `main.swift`.
 
 ## Permissions (all required)
 
