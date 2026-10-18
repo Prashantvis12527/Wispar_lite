@@ -1,6 +1,35 @@
 import AppKit
 
 enum Paster {
+    /// Roles that can be focused but never accept pasted text (Finder lists, buttons, the desktop...).
+    private static let nonTextRoles: Set<String> = [
+        "AXScrollArea", "AXList", "AXOutline", "AXTable", "AXBrowser", "AXImage", "AXButton",
+        "AXStaticText", "AXToolbar", "AXSplitGroup", "AXDesktop", "AXApplication",
+    ]
+
+    private static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+
+    /// Best guess at whether Cmd+V would land somewhere: a focused element that isn't obviously non-text,
+    /// or, when the app reports no focused element, a focused window (some apps don't expose it).
+    static func hasPasteTarget() -> Bool {
+        guard AXIsProcessTrusted() else { return true }
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &ref) == .success,
+           let el = ref {
+            var role: CFTypeRef?
+            AXUIElementCopyAttributeValue(el as! AXUIElement, kAXRoleAttribute as CFString, &role)
+            let r = role as? String ?? ""
+            // Finder turns a pasted string into a .txt clipping file, so there only a real text field counts.
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" { return textRoles.contains(r) }
+            return !nonTextRoles.contains(r)
+        }
+        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" { return false }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
+        var win: CFTypeRef?
+        return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier),
+                                             kAXFocusedWindowAttribute as CFString, &win) == .success
+    }
+
     /// Puts text on the clipboard, sends Cmd+V, then restores the previous clipboard.
     static func paste(_ text: String) {
         let pb = NSPasteboard.general

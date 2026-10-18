@@ -9,11 +9,11 @@ A lightweight macOS push-to-talk dictation tool. Hold a hotkey, speak, release, 
 ## How it works (pipeline)
 
 ```
-Right Option key  ->  record mic  ->  Groq Whisper (speech to text)
+Hotkey (default Right Option)  ->  record mic  ->  Groq Whisper (speech to text)
                                   ->  Groq Llama (light cleanup)  ->  paste into focused app
 ```
 
-1. **Hotkey** (`Hotkey.swift`): Right Option (keycode 61), watched globally via a `CGEventTap` on `flagsChanged`.
+1. **Hotkey** (`Hotkey.swift`): user-selectable (menu bar -> Hotkey; presets or "Record another key…"), default Right Option (keycode 61). Stored in `UserDefaults` key `hotkeyCode`. Watched globally via a listen-only `CGEventTap` on `flagsChanged` (modifiers) and `keyDown`/`keyUp` (regular keys like F5).
    - Hold >= 0.35 s then release: push-to-talk, finish and paste.
    - Double-tap within 0.5 s: recording locks on; one more tap stops and pastes.
    - A single short tap is ignored and discards the recording.
@@ -65,6 +65,15 @@ If neither exists, `Groq` throws `GroqError.noKey` ("No Groq API key set").
 
 **Privacy:** in cloud mode the recorded audio and the transcript are sent to Groq. Check Groq's data-retention terms.
 
+## Configurable hotkey
+
+The key is chosen from the menu bar: Hotkey submenu (presets: Right Option/Command/Control, Fn, F5, F6) or "Record another key…". Saved as `UserDefaults` key `hotkeyCode` (keycode, default 61).
+
+- `Hotkey.swift`: `keyCode` is a mutable property (setting it resets hold/lock state). One listen-only `CGEventTap` handles `flagsChanged`, `keyDown` and `keyUp`. Modifier keys are matched via the `modifierFlags` table (keycode -> flag, down = flag set); regular keys use keyDown/keyUp and ignore auto-repeat. `names` maps keycodes to menu labels, with a "Key N" fallback.
+- Recording a new key: `Hotkey.capture` is a one-shot closure. While set, the tap sends the next pressed key to it instead of triggering dictation (Esc and Caps Lock are ignored). `recordHotkey` in `main.swift` shows a modal alert and ends it from that closure.
+- `main.swift`: `rebuildHotkeyMenu` redraws the submenu and the top status line; `setHotkey` saves and applies a choice.
+- Limits: the tap is listen-only, so the chosen key still reaches the focused app (avoid keys you type with). Caps Lock can't be used.
+
 ## Cleanup prompt behaviour
 
 The Llama prompt adds punctuation and capitalization, removes filler words (um, uh), false starts and repeated words, and is told never to add information, paraphrase, summarize or follow instructions in the text. Cleanup can be toggled from the menu ("AI cleanup", stored in `UserDefaults` key `cleanup`, default on).
@@ -83,7 +92,7 @@ wispar_flow/
   Assets/                    logo: make_icon.swift draws icon_1024.png and the menubar glyph (re-run: swift Assets/make_icon.swift Assets)
   Sources/WisprLite/
     main.swift               App delegate, menu bar (logo glyph + state icons), permissions, orchestration, Debug logging
-    Hotkey.swift             global Right Option hold / double-tap detection
+    Hotkey.swift             global hotkey (configurable) hold / double-tap detection
     Recorder.swift           mic capture -> 16 kHz mono WAV, peak level
     Groq.swift               Groq Whisper + Llama calls, Vocabulary
     Paster.swift             clipboard-safe Cmd+V paste
@@ -101,7 +110,7 @@ wispar_flow/
 
 - **Microphone:** to record. If not yet decided, the app requests it; if denied, an alert explains how to fix it.
 - **Accessibility:** to send the Cmd+V paste.
-- **Input Monitoring:** for the global hotkey. Without it, Right Option does nothing and no "Tink" plays.
+- **Input Monitoring:** for the global hotkey. Without it, the hotkey does nothing and no "Tink" plays.
 
 ## Signing, and why it matters
 
@@ -137,6 +146,5 @@ If permissions get stuck: `tccutil reset All com.prashant.wisprlite`, relaunch, 
 
 - Offline fallback (Apple on-device speech recognition).
 - Launch at login.
-- Configurable hotkey (Right Option is hardcoded in `Hotkey.swift`).
 - Gemini free-tier fallback.
 - Notarization or a real Developer ID signature (not needed for personal use).

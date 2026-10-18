@@ -8,6 +8,8 @@ final class Recorder {
     private let lock = NSLock()
     /// Loudest sample (0...32767) of the last recording; near 0 means the mic gave silence.
     private(set) var lastPeak: Int = 0
+    /// Called on the main queue with the live mic level (0...1) while recording.
+    var onLevel: ((CGFloat) -> Void)?
     private let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
 
     func start() throws {
@@ -34,6 +36,13 @@ final class Recorder {
             guard err == nil, let ch = out.int16ChannelData else { return }
             let bytes = Data(bytes: ch[0], count: Int(out.frameLength) * 2)
             self.lock.lock(); self.pcm.append(bytes); self.lock.unlock()
+            if let onLevel = self.onLevel, out.frameLength > 0 {
+                var sum: Double = 0
+                for i in 0..<Int(out.frameLength) { let s = Double(ch[0][i]); sum += s * s }
+                let rms = (sum / Double(out.frameLength)).squareRoot() / 32768
+                let level = CGFloat(min(1, rms * 9))   // speech RMS is small; scale it to fill the bars
+                DispatchQueue.main.async { onLevel(level) }
+            }
         }
         try engine.start()
         self.engine = engine
