@@ -26,6 +26,10 @@ final class Overlay: NSObject {
     private var card: NSPanel?
     private var cardText = ""
     private var copyButton: NSButton?
+    private var cardTimer: Timer?
+    private var cardRemaining: TimeInterval = 0
+    private var ring: CAShapeLayer?
+    private static let cardLifetime: TimeInterval = 10
 
     var position: Position = .bottom {
         didSet {
@@ -156,6 +160,19 @@ final class Overlay: NSObject {
         close.frame = NSRect(x: width - inset - 22, y: y - 2, width: 22, height: 20)
         bg.addSubview(close)
 
+        // Countdown ring around the close button: starts full at 12 o'clock and drains as the card's time runs out.
+        let ring = CAShapeLayer()
+        let center = CGPoint(x: close.frame.midX, y: close.frame.midY)
+        let path = CGMutablePath()
+        path.addArc(center: center, radius: 10, startAngle: .pi / 2, endAngle: -3 * .pi / 2, clockwise: true)
+        ring.path = path
+        ring.fillColor = nil
+        ring.strokeColor = NSColor.white.withAlphaComponent(0.75).cgColor
+        ring.lineWidth = 1.5
+        ring.lineCap = .round
+        bg.layer?.addSublayer(ring)
+        self.ring = ring
+
         y -= gap + textH
         let scroll = NSScrollView(frame: NSRect(x: inset, y: y, width: width - 2 * inset, height: textH))
         scroll.drawsBackground = false
@@ -197,6 +214,28 @@ final class Overlay: NSObject {
         p.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { $0.duration = 0.18; p.animator().alphaValue = 1 }
         card = p
+        startCardTimer()
+    }
+
+    /// Counts down `cardLifetime` seconds, draining the ring, then fades the card out.
+    /// The countdown pauses while the mouse is over the card (reading or selecting text).
+    private func startCardTimer() {
+        cardTimer?.invalidate()
+        cardRemaining = Overlay.cardLifetime
+        let step = 0.1
+        cardTimer = Timer.scheduledTimer(withTimeInterval: step, repeats: true) { [weak self] _ in
+            guard let self, let p = self.card else { return }
+            if p.frame.contains(NSEvent.mouseLocation) { return }
+            self.cardRemaining -= step
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.ring?.strokeEnd = CGFloat(max(self.cardRemaining, 0) / Overlay.cardLifetime)
+            CATransaction.commit()
+            guard self.cardRemaining <= 0 else { return }
+            self.cardTimer?.invalidate()
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.25; p.animator().alphaValue = 0 },
+                                                 completionHandler: { if self.card === p { self.dismissCard() } })
+        }
     }
 
     @objc private func copyCard() {
@@ -208,6 +247,9 @@ final class Overlay: NSObject {
     }
 
     @objc func dismissCard() {
+        cardTimer?.invalidate()
+        cardTimer = nil
+        ring = nil
         card?.orderOut(nil)
         card = nil
         copyButton = nil

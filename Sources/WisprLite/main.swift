@@ -6,6 +6,7 @@ final class App: NSObject, NSApplicationDelegate {
     private let hotkey = Hotkey()
     private let recorder = Recorder()
     private let overlay = Overlay()
+    private let dashboard = Dashboard()
     private var lastText = ""
     private var recording = false
     private var cleanupItem: NSMenuItem!
@@ -33,6 +34,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         Vocabulary.ensureFile()
+        dashboard.host = self
         overlay.position = iconPosition
         overlay.idleVisible = floatingEnabled
         recorder.onLevel = { [weak self] in self?.overlay.setLevel($0) }
@@ -45,6 +47,14 @@ final class App: NSObject, NSApplicationDelegate {
         menu.addItem(hotkeyRoot)
         hotkey.keyCode = hotkeyCode
         rebuildHotkeyMenu()
+        menu.addItem(.separator())
+        for (title, action, key) in [("Insights…", #selector(showInsights), "i"),
+                                     ("History…", #selector(showHistory), "y"),
+                                     ("Settings…", #selector(showSettings), ",")] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.target = self
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
         cleanupItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleCleanup), keyEquivalent: "")
         cleanupItem.target = self
@@ -163,6 +173,7 @@ final class App: NSObject, NSApplicationDelegate {
         }
         let cleanup = cleanupEnabled
         let peak = recorder.lastPeak
+        let seconds = Double(max(wav.count - 44, 0)) / 32_000   // 16 kHz, 16-bit mono WAV
         Debug.saveLast(wav)
         Task {
             do {
@@ -177,6 +188,8 @@ final class App: NSObject, NSApplicationDelegate {
                     self.setIcon("mic")
                     guard !final.isEmpty else { return }
                     self.lastText = final
+                    History.add(text: final, seconds: seconds)
+                    self.dashboard.reload()
                     if Paster.hasPasteTarget() { Paster.paste(final) } else { self.overlay.showCard(final) }
                 }
             } catch {
@@ -208,6 +221,7 @@ final class App: NSObject, NSApplicationDelegate {
         hotkeyCode = code
         hotkey.keyCode = code
         rebuildHotkeyMenu()
+        dashboard.reload()
     }
 
     @objc private func pickHotkey(_ sender: NSMenuItem) {
@@ -228,6 +242,10 @@ final class App: NSObject, NSApplicationDelegate {
         hotkey.capture = nil
     }
 
+    @objc private func showInsights() { dashboard.show(.insights) }
+    @objc private func showHistory() { dashboard.show(.history) }
+    @objc private func showSettings() { dashboard.show(.settings) }
+
     @objc private func editVocab() {
         Vocabulary.ensureFile()
         NSWorkspace.shared.open(Vocabulary.url)
@@ -237,6 +255,7 @@ final class App: NSObject, NSApplicationDelegate {
         floatingEnabled.toggle()
         floatItem.state = floatingEnabled ? .on : .off
         overlay.idleVisible = floatingEnabled
+        dashboard.reload()
     }
 
     private var iconPosition: Overlay.Position {
@@ -253,6 +272,7 @@ final class App: NSObject, NSApplicationDelegate {
         iconPosition = pos
         overlay.position = pos
         refreshPositionMenu()
+        dashboard.reload()
     }
 
     @objc private func copyLast() {
@@ -264,6 +284,7 @@ final class App: NSObject, NSApplicationDelegate {
     @objc private func toggleCleanup() {
         cleanupEnabled.toggle()
         cleanupItem.state = cleanupEnabled ? .on : .off
+        dashboard.reload()
     }
 
     @objc private func setKey() {
@@ -287,6 +308,34 @@ final class App: NSObject, NSApplicationDelegate {
         a.informativeText = msg
         a.runModal()
     }
+}
+
+extension App: DashboardHost {
+    var isCleanupOn: Bool { cleanupEnabled }
+    var isFloatingOn: Bool { floatingEnabled }
+    var currentPosition: Overlay.Position { iconPosition }
+    var hotkeyName: String { Hotkey.name(for: hotkeyCode) }
+
+    func setCleanup(_ on: Bool) {
+        cleanupEnabled = on
+        cleanupItem.state = on ? .on : .off
+    }
+
+    func setFloating(_ on: Bool) {
+        floatingEnabled = on
+        floatItem.state = on ? .on : .off
+        overlay.idleVisible = on
+    }
+
+    func setPosition(_ pos: Overlay.Position) {
+        iconPosition = pos
+        overlay.position = pos
+        refreshPositionMenu()
+    }
+
+    func changeHotkey() { recordHotkey() }
+    func openKeyDialog() { setKey() }
+    func openVocabulary() { editVocab() }
 }
 
 let app = NSApplication.shared
