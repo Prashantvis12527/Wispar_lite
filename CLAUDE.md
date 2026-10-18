@@ -1,10 +1,10 @@
 # WisprLite: project overview
 
-A tiny macOS push-to-talk dictation tool, a low-RAM clone of Wispr Flow. Hold a hotkey, speak, release, and the transcribed text is pasted into whatever app has focus.
+A lightweight macOS push-to-talk dictation tool. Hold a hotkey, speak, release, and the transcribed text is pasted into whatever app has focus.
 
-**Why it exists:** Wispr Flow can consume approximately 400 MB–1 GB of RAM, making it unnecessarily heavy for an 8 GB MacBook Air. WisprLite is a lightweight, native Swift menu-bar app designed to minimize memory usage. It runs without a main window or Dock icon and does not bundle speech-recognition models. Audio is processed by Groq’s cloud API, eliminating the need to load large speech-recognition models locally.
+**What it solves:** voice dictation tools are often heavy desktop apps with large memory footprints and a lot of UI. WisprLite does one job, turning speech into text in any app, as a small native Swift menu-bar agent with no window, no Dock icon and no bundled speech model. Transcription and cleanup are done by Groq's hosted models, so nothing large is loaded locally.
 
-**Priorities, in order:** (1) minimum RAM, (2) accurate transcription of what was actually said, (3) light Wispr-style cleanup. No paid services, English only, latest macOS only.
+**Priorities, in order:** (1) low memory use, (2) accurate transcription of what was actually said, (3) light cleanup (punctuation, filler words). No paid services, English only, latest macOS only.
 
 ## How it works (pipeline)
 
