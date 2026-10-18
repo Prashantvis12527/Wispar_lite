@@ -5,24 +5,69 @@ final class App: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let hotkey = Hotkey()
     private let recorder = Recorder()
+    private let overlay = Overlay()
+    private var lastText = ""
     private var recording = false
     private var cleanupItem: NSMenuItem!
+    private var floatItem: NSMenuItem!
+    private var positionMenu: NSMenu!
+    private var hotkeyHeader: NSMenuItem!
+    private var hotkeyMenu: NSMenu!
+
+    private static let presetKeys: [Int64] = [61, 54, 62, 63, 96, 97]   // Right Option/Command/Control, Fn, F5, F6
+
+    private var hotkeyCode: Int64 {
+        get { UserDefaults.standard.object(forKey: "hotkeyCode") as? Int64 ?? Hotkey.defaultKeyCode }
+        set { UserDefaults.standard.set(newValue, forKey: "hotkeyCode") }
+    }
 
     private var cleanupEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "cleanup") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "cleanup") }
     }
 
+    private var floatingEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "floatingIcon") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "floatingIcon") }
+    }
+
     func applicationDidFinishLaunching(_ n: Notification) {
         Vocabulary.ensureFile()
+        overlay.position = iconPosition
+        overlay.idleVisible = floatingEnabled
+        recorder.onLevel = { [weak self] in self?.overlay.setLevel($0) }
         setIcon("mic")
         let menu = NSMenu()
-        menu.addItem(withTitle: "Hold or double-tap Right Option to dictate", action: nil, keyEquivalent: "")
+        hotkeyHeader = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        let hotkeyRoot = NSMenuItem(title: "Hotkey", action: nil, keyEquivalent: "")
+        hotkeyMenu = NSMenu(title: "Hotkey")
+        hotkeyRoot.submenu = hotkeyMenu
+        menu.addItem(hotkeyRoot)
+        hotkey.keyCode = hotkeyCode
+        rebuildHotkeyMenu()
         menu.addItem(.separator())
         cleanupItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleCleanup), keyEquivalent: "")
         cleanupItem.target = self
         cleanupItem.state = cleanupEnabled ? .on : .off
         menu.addItem(cleanupItem)
+        floatItem = NSMenuItem(title: "Floating icon", action: #selector(toggleFloating), keyEquivalent: "")
+        floatItem.target = self
+        floatItem.state = floatingEnabled ? .on : .off
+        menu.addItem(floatItem)
+        let positionRoot = NSMenuItem(title: "Icon position", action: nil, keyEquivalent: "")
+        positionMenu = NSMenu(title: "Icon position")
+        for pos in Overlay.Position.allCases {
+            let item = NSMenuItem(title: pos.title, action: #selector(pickPosition(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = pos.rawValue
+            positionMenu.addItem(item)
+        }
+        positionRoot.submenu = positionMenu
+        menu.addItem(positionRoot)
+        refreshPositionMenu()
+        let copyLast = NSMenuItem(title: "Copy last dictation", action: #selector(copyLast), keyEquivalent: "")
+        copyLast.target = self
+        menu.addItem(copyLast)
         let key = NSMenuItem(title: "Set Groq API key…", action: #selector(setKey), keyEquivalent: "")
         key.target = self
         menu.addItem(key)
@@ -58,8 +103,22 @@ final class App: NSObject, NSApplicationDelegate {
         if Keychain.load() == nil { setKey() }
     }
 
+    /// Idle ("mic") shows the WisprLite glyph; recording and processing keep system symbols as state feedback.
+    private lazy var logoGlyph: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "menubar", withExtension: "png"),
+              let img = NSImage(contentsOf: url) else { return nil }
+        img.size = NSSize(width: 18, height: 18)
+        img.isTemplate = true
+        return img
+    }()
+
     private func setIcon(_ symbol: String) {
-        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        overlay.setMode(symbol == "mic.fill" ? .listening : symbol == "ellipsis.circle" ? .processing : .idle)
+        if symbol == "mic", let glyph = logoGlyph {
+            statusItem.button?.image = glyph
+        } else {
+            statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        }
     }
 
     private func startRecording() {
@@ -79,7 +138,7 @@ final class App: NSObject, NSApplicationDelegate {
         do { try recorder.start() } catch { notify("Mic error: \(error.localizedDescription)"); return }
         recording = true
         setIcon("mic.fill")
-        NSSound(named: "Tink")?.play()
+        Sounds.play(Sounds.start)
     }
 
     private func cancelRecording() {
@@ -93,10 +152,12 @@ final class App: NSObject, NSApplicationDelegate {
         guard recording else { return }
         recording = false
         setIcon("ellipsis.circle")
-        NSSound(named: "Pop")?.play()
+        Sounds.play(Sounds.stop)
         guard let wav = recorder.stop() else { setIcon("mic"); return }
         guard recorder.lastPeak > 300 else {   // silence makes Whisper hallucinate "Thank you."
             setIcon("mic")
+            // Quiet room noise (an accidental press) is dropped silently; only a truly dead mic gets a warning.
+            guard recorder.lastPeak < 10 else { return }
             notify("The mic captured only silence (level \(recorder.lastPeak)). Check Microphone permission and the selected input device in System Settings > Sound > Input.")
             return
         }
@@ -114,7 +175,9 @@ final class App: NSObject, NSApplicationDelegate {
                 Debug.log(peak: peak, raw: raw, cleaned: final)
                 await MainActor.run {
                     self.setIcon("mic")
-                    if !final.isEmpty { Paster.paste(final) }
+                    guard !final.isEmpty else { return }
+                    self.lastText = final
+                    if Paster.hasPasteTarget() { Paster.paste(final) } else { self.overlay.showCard(final) }
                 }
             } catch {
                 await MainActor.run { self.setIcon("mic"); self.notify(error.localizedDescription) }
@@ -122,9 +185,80 @@ final class App: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func rebuildHotkeyMenu() {
+        let current = hotkeyCode
+        hotkeyHeader.title = "Hold or double-tap \(Hotkey.name(for: current)) to dictate"
+        hotkeyMenu.removeAllItems()
+        var codes = App.presetKeys
+        if !codes.contains(current) { codes.append(current) }
+        for code in codes {
+            let item = NSMenuItem(title: Hotkey.name(for: code), action: #selector(pickHotkey(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(code)
+            item.state = code == current ? .on : .off
+            hotkeyMenu.addItem(item)
+        }
+        hotkeyMenu.addItem(.separator())
+        let other = NSMenuItem(title: "Record another key…", action: #selector(recordHotkey), keyEquivalent: "")
+        other.target = self
+        hotkeyMenu.addItem(other)
+    }
+
+    private func setHotkey(_ code: Int64) {
+        hotkeyCode = code
+        hotkey.keyCode = code
+        rebuildHotkeyMenu()
+    }
+
+    @objc private func pickHotkey(_ sender: NSMenuItem) {
+        setHotkey(Int64(sender.tag))
+    }
+
+    @objc private func recordHotkey() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Press the key to use as the hotkey"
+        alert.informativeText = "Any modifier (Option, Command, Control, Shift, Fn) or a key like F5. Esc or Cancel keeps the current one. The key still reaches the focused app, so a key you don't type with works best."
+        alert.addButton(withTitle: "Cancel")
+        hotkey.capture = { [weak self] code in
+            self?.setHotkey(code)
+            NSApp.abortModal()
+        }
+        alert.runModal()
+        hotkey.capture = nil
+    }
+
     @objc private func editVocab() {
         Vocabulary.ensureFile()
         NSWorkspace.shared.open(Vocabulary.url)
+    }
+
+    @objc private func toggleFloating() {
+        floatingEnabled.toggle()
+        floatItem.state = floatingEnabled ? .on : .off
+        overlay.idleVisible = floatingEnabled
+    }
+
+    private var iconPosition: Overlay.Position {
+        get { Overlay.Position(rawValue: UserDefaults.standard.string(forKey: "iconPosition") ?? "") ?? .bottom }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "iconPosition") }
+    }
+
+    private func refreshPositionMenu() {
+        for item in positionMenu.items { item.state = (item.representedObject as? String) == iconPosition.rawValue ? .on : .off }
+    }
+
+    @objc private func pickPosition(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let pos = Overlay.Position(rawValue: raw) else { return }
+        iconPosition = pos
+        overlay.position = pos
+        refreshPositionMenu()
+    }
+
+    @objc private func copyLast() {
+        guard !lastText.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lastText, forType: .string)
     }
 
     @objc private func toggleCleanup() {
