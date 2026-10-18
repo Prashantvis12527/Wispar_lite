@@ -107,4 +107,12 @@ enum Vocabulary {
         let w = words()
         return w.isEmpty ? nil : "Terms: " + w.joined(separator: ", ") + "."
     }
+
+    /// With little or no speech, Whisper tends to echo its prompt back. A result made only of
+    /// vocabulary terms (and "Terms") is treated as nothing heard.
+    static func isPromptEcho(_ text: String) -> Bool {
+        let terms = Set(words().map { $0.lowercased() } + ["terms"])
+        let tokens = text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)
+        return tokens.allSatisfy { terms.contains($0) }
+    }
 }
