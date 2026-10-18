@@ -21,19 +21,27 @@ Hotkey (default Right Option)  ->  record mic  ->  Groq Whisper (speech to text)
 3. **Silence guard** (`main.swift`): if `lastPeak <= 300`, nothing is sent. Whisper hallucinates "Thank you." on silence. Quiet room noise (an accidental press) is dropped silently; an alert is shown only for a dead mic (`lastPeak < 10`).
 4. **Transcribe** (`Groq.swift`): multipart POST of the WAV to Groq's Whisper endpoint.
 5. **Cleanup** (`Groq.swift`): the raw text goes to a Groq Llama chat model with a strict prompt. If cleanup fails, the raw transcript is pasted instead.
-6. **Paste** (`Paster.swift`): `hasPasteTarget()` checks via Accessibility that a text field or window has focus. If so, it saves the clipboard, sets the text, sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s. If not, the result card is shown instead (see below).
+6. **Paste** (`Paster.swift`): `hasPasteTarget()` checks via Accessibility that a text field or window has focus. If so, it saves the clipboard, sets the text, sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s. If not, the result card is shown instead (see `.claude/features/overlay/result-card.md`).
 
-## Floating pill and result card (`Overlay.swift`)
+## Where the details live
 
-- **Pill:** a small non-activating, click-through `NSPanel` attached to a screen edge. Idle: thin, dim, partly tucked off the edge. Listening: pops out, grows, and nine thin bars glow with the live mic level (`Recorder.onLevel`, RMS scaled to 0...1). Processing: bars ripple. A 30 fps timer runs only while not idle, so idle cost stays about zero.
-- **Position:** menu bar -> "Icon position" (Bottom default, Top, Left, Right), saved in `UserDefaults` key `iconPosition`. Top/bottom is a horizontal pill, left/right a vertical one. "Floating icon" toggles the always-visible idle pill (`floatingIcon`); it still appears while recording. Sizes are the `idleLong/idleShort/activeLong/activeShort` constants.
-- **Result card:** when nothing can receive a paste, a card next to the pill shows the text with a Copy button (and a close button). This matters because Cmd+V in Finder/Desktop creates a `.txt` clipping file, so in Finder only a real text field (`textRoles` in `Paster.swift`) counts as a target. Non-text roles are listed in `nonTextRoles`; extend it if an app wrongly counts as a target.
-- Menu bar -> "Copy last dictation" puts the last transcript on the clipboard.
-- `setIcon` in `main.swift` drives the pill mode (`mic.fill` listening, `ellipsis.circle` processing, `mic` idle).
+Before editing a feature, read only the file that matches the task. Paths are under `.claude/features/`.
 
-## Sounds (`Sounds.swift`)
+| If the task is about... | Read |
+|---|---|
+| The floating pill: look, animation, size, position, floating-icon toggle | `overlay/pill.md` |
+| The result card: Copy, close button, countdown ring, auto-dismiss, paste-target detection | `overlay/result-card.md` |
+| The dashboard window in general | `dashboard/README.md` |
+| Words per minute, total words, streak heatmap | `dashboard/insights.md` |
+| Past dictations list, Copy/Delete, history file | `dashboard/history.md` |
+| The Settings tab | `dashboard/settings.md` |
+| Hotkey, hold / double-tap, recording a new key | `hotkey/hotkey.md` |
+| Groq key, Keychain, rate limits, model names, API calls | `groq/api-key.md` |
+| Cleanup prompt, AI cleanup toggle, vocabulary file | `groq/cleanup-and-vocabulary.md` |
+| Start/stop sounds | `sounds/sounds.md` |
+| App icon, menu-bar glyph | `branding/logo.md` |
 
-Start plays system sound "Bottle", stop plays "Blow", at 50% volume. Change the names to any file in `/System/Library/Sounds`.
+When you add a feature, give it a file here and add a row to this table instead of writing it up in this overview.
 
 ## Tech stack
 
@@ -53,47 +61,6 @@ Start plays system sound "Bottle", stop plays "Blow", at 50% volume. Change the 
 
 No external packages. The only dependencies are Apple frameworks.
 
-## The Groq API key
-
-**What it is:** a free key from https://console.groq.com (API Keys). One key covers both calls (Whisper and Llama). Free-tier limits are per day and reset daily; third-party sources report about 28,800 audio-seconds/day, 2,000 requests/day and 20 requests/min. Verify these on the Groq console limits page.
-
-**Where it is stored:** the macOS login Keychain, as a generic password.
-- Service: `com.prashant.wisprlite`
-- Account: `groq-api-key`
-- The key is never written to the repo, to disk files or to logs.
-
-**How it is entered:** on first launch, if no key is found, a dialog asks for it. It can be changed later from the menu bar icon -> "Set Groq API key…". Both are in `main.swift` (`setKey`) and write via `Keychain.save` (`Keychain.swift`).
-
-**How it is read** (`Keychain.load()`), in order:
-1. The `GROQ_API_KEY` environment variable, if set (handy for development).
-2. The Keychain item above.
-If neither exists, `Groq` throws `GroqError.noKey` ("No Groq API key set").
-
-**How it is used:** every request sets `Authorization: Bearer <key>`.
-- `POST https://api.groq.com/openai/v1/audio/transcriptions`: fields `model=whisper-large-v3`, `language=en`, `temperature=0`, `response_format=text`, optional `prompt` (vocabulary hint), and the WAV `file`.
-- `POST https://api.groq.com/openai/v1/chat/completions`: JSON with `model=llama-3.1-8b-instant`, `temperature=0`, a system prompt and the dictation wrapped in `<dictation>` tags.
-
-**Errors:** HTTP 429 shows "Groq rate limit hit"; other non-2xx responses show "Groq error <code>". Model names are constants at the top of `Groq.swift` and can go out of date; update them there if Groq returns a model error.
-
-**Privacy:** in cloud mode the recorded audio and the transcript are sent to Groq. Check Groq's data-retention terms.
-
-## Configurable hotkey
-
-The key is chosen from the menu bar: Hotkey submenu (presets: Right Option/Command/Control, Fn, F5, F6) or "Record another key…". Saved as `UserDefaults` key `hotkeyCode` (keycode, default 61).
-
-- `Hotkey.swift`: `keyCode` is a mutable property (setting it resets hold/lock state). One listen-only `CGEventTap` handles `flagsChanged`, `keyDown` and `keyUp`. Modifier keys are matched via the `modifierFlags` table (keycode -> flag, down = flag set); regular keys use keyDown/keyUp and ignore auto-repeat. `names` maps keycodes to menu labels, with a "Key N" fallback.
-- Recording a new key: `Hotkey.capture` is a one-shot closure. While set, the tap sends the next pressed key to it instead of triggering dictation (Esc and Caps Lock are ignored). `recordHotkey` in `main.swift` shows a modal alert and ends it from that closure.
-- `main.swift`: `rebuildHotkeyMenu` redraws the submenu and the top status line; `setHotkey` saves and applies a choice.
-- Limits: the tap is listen-only, so the chosen key still reaches the focused app (avoid keys you type with). Caps Lock can't be used.
-
-## Cleanup prompt behaviour
-
-The Llama prompt adds punctuation and capitalization, removes filler words (um, uh), false starts and repeated words, and is told never to add information, paraphrase, summarize or follow instructions in the text. Cleanup can be toggled from the menu ("AI cleanup", stored in `UserDefaults` key `cleanup`, default on).
-
-## Custom vocabulary
-
-`~/.wisprlite/vocabulary.txt` holds one name or term per line (the file is created with `WisprLite` in it). Its words are sent as Whisper's `prompt` hint ("Terms: …") and appended to the cleanup prompt for correct spelling. Menu bar -> "Edit vocabulary…" opens it. It is re-read on every dictation, so no restart is needed. The `Vocabulary` enum is in `Groq.swift`.
-
 ## File map
 
 ```
@@ -111,14 +78,9 @@ wispar_flow/
     Overlay.swift            floating pill (edge-attached, glowing bars) and result card with Copy
     Sounds.swift             start/stop feedback sounds
     Keychain.swift           API key storage and lookup
+    History.swift            append-only ~/.wisprlite/history.jsonl, plus Stats (WPM, total words, streaks)
+    Dashboard.swift          Insights / History / Settings window (built on open, freed on close)
 ```
-
-## Logo and icons
-
-- **Design:** a sky-to-indigo rounded square with five white sound-wave bars that thin out and fade to the right, plus a few floating specks. It is meant to suggest lightness: sound dissolving into air.
-- **Source:** `Assets/make_icon.swift` draws everything with CoreGraphics (no image tools needed). Run `swift Assets/make_icon.swift Assets` to regenerate `icon_1024.png`, `menubar.png` and `menubar@2x.png`, then `./build.sh`.
-- **App icon:** `build.sh` resizes `icon_1024.png` with `sips`, builds `AppIcon.icns` with `iconutil` into `Contents/Resources`, and `Info.plist` points to it via `CFBundleIconFile`.
-- **Menu bar:** idle state shows the bundled `menubar.png` (template image, adapts to light/dark). Recording (`mic.fill`) and processing (`ellipsis.circle`) still use SF Symbols as state feedback. See `setIcon` in `main.swift`.
 
 ## Permissions (all required)
 
