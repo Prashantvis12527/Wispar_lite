@@ -18,10 +18,22 @@ Hotkey (default Right Option)  ->  record mic  ->  Groq Whisper (speech to text)
    - Double-tap within 0.5 s: recording locks on; one more tap stops and pastes.
    - A single short tap is ignored and discards the recording.
 2. **Record** (`Recorder.swift`): `AVAudioEngine` microphone tap, converted with `AVAudioConverter` to 16 kHz mono 16-bit PCM, wrapped as an in-memory WAV. The engine exists only while recording, so idle cost is about zero. `lastPeak` stores the loudest sample.
-3. **Silence guard** (`main.swift`): if `lastPeak <= 300`, nothing is sent and an alert is shown. Whisper hallucinates "Thank you." on silence.
+3. **Silence guard** (`main.swift`): if `lastPeak <= 300`, nothing is sent. Whisper hallucinates "Thank you." on silence. Quiet room noise (an accidental press) is dropped silently; an alert is shown only for a dead mic (`lastPeak < 10`).
 4. **Transcribe** (`Groq.swift`): multipart POST of the WAV to Groq's Whisper endpoint.
 5. **Cleanup** (`Groq.swift`): the raw text goes to a Groq Llama chat model with a strict prompt. If cleanup fails, the raw transcript is pasted instead.
-6. **Paste** (`Paster.swift`): saves the clipboard, sets the text, sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s.
+6. **Paste** (`Paster.swift`): `hasPasteTarget()` checks via Accessibility that a text field or window has focus. If so, it saves the clipboard, sets the text, sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s. If not, the result card is shown instead (see below).
+
+## Floating pill and result card (`Overlay.swift`)
+
+- **Pill:** a small non-activating, click-through `NSPanel` attached to a screen edge. Idle: thin, dim, partly tucked off the edge. Listening: pops out, grows, and nine thin bars glow with the live mic level (`Recorder.onLevel`, RMS scaled to 0...1). Processing: bars ripple. A 30 fps timer runs only while not idle, so idle cost stays about zero.
+- **Position:** menu bar -> "Icon position" (Bottom default, Top, Left, Right), saved in `UserDefaults` key `iconPosition`. Top/bottom is a horizontal pill, left/right a vertical one. "Floating icon" toggles the always-visible idle pill (`floatingIcon`); it still appears while recording. Sizes are the `idleLong/idleShort/activeLong/activeShort` constants.
+- **Result card:** when nothing can receive a paste, a card next to the pill shows the text with a Copy button (and a close button). This matters because Cmd+V in Finder/Desktop creates a `.txt` clipping file, so in Finder only a real text field (`textRoles` in `Paster.swift`) counts as a target. Non-text roles are listed in `nonTextRoles`; extend it if an app wrongly counts as a target.
+- Menu bar -> "Copy last dictation" puts the last transcript on the clipboard.
+- `setIcon` in `main.swift` drives the pill mode (`mic.fill` listening, `ellipsis.circle` processing, `mic` idle).
+
+## Sounds (`Sounds.swift`)
+
+Start plays system sound "Bottle", stop plays "Blow", at 50% volume. Change the names to any file in `/System/Library/Sounds`.
 
 ## Tech stack
 
@@ -93,9 +105,11 @@ wispar_flow/
   Sources/WisprLite/
     main.swift               App delegate, menu bar (logo glyph + state icons), permissions, orchestration, Debug logging
     Hotkey.swift             global hotkey (configurable) hold / double-tap detection
-    Recorder.swift           mic capture -> 16 kHz mono WAV, peak level
+    Recorder.swift           mic capture -> 16 kHz mono WAV, peak and live level
     Groq.swift               Groq Whisper + Llama calls, Vocabulary
-    Paster.swift             clipboard-safe Cmd+V paste
+    Paster.swift             paste-target check, clipboard-safe Cmd+V paste
+    Overlay.swift            floating pill (edge-attached, glowing bars) and result card with Copy
+    Sounds.swift             start/stop feedback sounds
     Keychain.swift           API key storage and lookup
 ```
 
