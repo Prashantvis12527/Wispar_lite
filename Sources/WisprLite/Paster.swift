@@ -21,7 +21,17 @@ enum Paster {
             let r = role as? String ?? ""
             // Finder turns a pasted string into a .txt clipping file, so there only a real text field counts.
             if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" { return textRoles.contains(r) }
-            return !nonTextRoles.contains(r)
+            if textRoles.contains(r) { return true }
+            if nonTextRoles.contains(r) { return false }
+            // Unknown role (e.g. a browser's AXWebArea/AXGroup when you click outside the chat box):
+            // only a target if the element actually behaves like editable text.
+            let ax = el as! AXUIElement
+            var names: CFArray?
+            AXUIElementCopyAttributeNames(ax, &names)
+            if (names as? [String])?.contains(kAXSelectedTextRangeAttribute as String) == true { return true }
+            var settable: DarwinBoolean = false
+            AXUIElementIsAttributeSettable(ax, kAXValueAttribute as CFString, &settable)
+            return settable.boolValue
         }
         if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" { return false }
         guard let app = NSWorkspace.shared.frontmostApplication else { return false }
