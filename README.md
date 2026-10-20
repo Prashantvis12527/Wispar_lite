@@ -126,13 +126,6 @@ Sources/WisprLite/
 
 Per-feature design notes live in [`.claude/features/`](.claude/features), and [`CLAUDE.md`](CLAUDE.md) has the full project overview.
 
-## Roadmap
-
-- [ ] Offline fallback using Apple's on-device speech recognition
-- [x] Launch at login
-- [ ] Gemini free-tier fallback
-- [ ] Notarized, prebuilt releases
-
 ## Limitations
 
 - English only.
