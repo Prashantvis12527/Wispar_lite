@@ -10,4 +10,3 @@ Read this for how dictated text lands in the focused app: clipboard handling and
   - Tradeoff: clearing a field and dictating again in the same app within 2 minutes can add a stray leading space.
 - **Not handled:** capitalization of a chunk that continues an unfinished sentence.
 - Each paste logs a `paste app=... -> space=...` line to `~/Library/Logs/WisprLite/log.txt` (`Debug.note`), showing which path decided.
-- **Prompt-echo guard:** with near-silent audio Whisper can echo its vocabulary hint (e.g. "WisprLite."). `Vocabulary.isPromptEcho` drops such results in `main.swift` before cleanup, so nothing is pasted. See `groq/cleanup-and-vocabulary.md`.

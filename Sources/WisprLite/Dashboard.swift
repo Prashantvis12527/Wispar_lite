@@ -7,12 +7,21 @@ protocol DashboardHost: AnyObject {
     var currentPosition: Overlay.Position { get }
     var hotkeyName: String { get }
     var isLaunchAtLoginOn: Bool { get }
+    var hasKey: Bool { get }
+    var currentProvider: Provider { get }
+    var transcriptionDetail: String { get }
+    func setProvider(_ p: Provider)
+    func changeKey()
+    var needsSpeechModel: Bool { get }
+    func installSpeechModel()
     func setCleanup(_ on: Bool)
     func setFloating(_ on: Bool)
     func setLaunchAtLogin(_ on: Bool)
     func setPosition(_ pos: Overlay.Position)
     func changeHotkey()
     func openKeyDialog()
+    func testKey()
+    func removeKey()
     func openVocabulary()
 }
 
@@ -501,6 +510,12 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTabl
         positions.target = self
         positions.action = #selector(positionPicked(_:))
 
+        let providers = NSPopUpButton(frame: .zero, pullsDown: false)
+        for p in Provider.allCases { providers.addItem(withTitle: p.title) }
+        providers.selectItem(at: Provider.allCases.firstIndex(of: host.currentProvider) ?? 0)
+        providers.target = self
+        providers.action = #selector(providerPicked(_:))
+
         let general = group("General", [
             setting("Hotkey", "Hold to talk, double-tap to lock on", buttons: [hotkeyValue, button("Change…", #selector(changeHotkey))]),
             setting("AI cleanup", "Fix punctuation and remove filler words", control: toggle(host.isCleanupOn, #selector(cleanupToggled(_:)))),
@@ -515,7 +530,13 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTabl
             setting("Clear history and stats", "Deletes \(History.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))", control: button("Clear…", #selector(clearHistory))),
         ])
         let setup = group("Setup", [
-            setting("Groq API key", "Stored in your Keychain", control: button("Set…", #selector(setKey))),
+            setting("AI provider", "Used for AI cleanup. Each provider has its own key.", control: providers),
+            host.hasKey
+                ? setting("\(host.currentProvider.title) API key", "Saved in your Keychain", buttons: [button("Update…", #selector(updateKey)), button("Test", #selector(testKey)), button("Remove…", #selector(removeKey))])
+                : setting("\(host.currentProvider.title) API key", "Not set: AI cleanup is unavailable. \(host.currentProvider.consoleHint)", control: button("Add…", #selector(setKey))),
+            host.needsSpeechModel
+                ? setting("Transcription", host.transcriptionDetail, control: button("Install…", #selector(installSpeechModel)))
+                : setting("Transcription", host.transcriptionDetail, control: label("", size: 1)),
             setting("Vocabulary", "Names and terms Whisper should spell correctly", control: button("Edit…", #selector(editVocab))),
         ])
         let root = vstack([general, pill, history, setup], spacing: 16)
@@ -582,6 +603,14 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTabl
     }
     @objc private func changeHotkey() { host?.changeHotkey(); reload() }
     @objc private func setKey() { host?.openKeyDialog() }
+    @objc private func installSpeechModel() { host?.installSpeechModel() }
+    @objc private func updateKey() { host?.changeKey() }
+    @objc private func providerPicked(_ p: NSPopUpButton) {
+        let all = Provider.allCases
+        if p.indexOfSelectedItem < all.count { host?.setProvider(all[p.indexOfSelectedItem]) }
+    }
+    @objc private func testKey() { host?.testKey() }
+    @objc private func removeKey() { host?.removeKey() }
     @objc private func editVocab() { host?.openVocabulary() }
 
     @objc private func clearHistory() {

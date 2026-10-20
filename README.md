@@ -34,29 +34,28 @@ Many dictation apps are large desktop programs with a heavy interface and a big 
 - **Light AI cleanup.** Adds punctuation and removes "um", "uh", false starts and repeated words. It never adds, paraphrases or summarizes. You can turn it off.
 - **Custom vocabulary.** Add names and technical terms to a text file so they're spelled correctly.
 - **Safe paste.** Your clipboard is saved and restored after pasting. If no text field has focus, a result card with a Copy button is shown instead.
-- **Silence protection.** Silent or near-silent recordings aren't sent, which avoids the "Thank you." hallucination Whisper produces on empty audio.
+- **Silence protection.** Silent or near-silent recordings are dropped before transcription.
 - **Floating pill and sounds.** A small overlay and start/stop sounds show recording state. The pill can be hidden.
 - **Dashboard.** Words per minute, total words, a streak heatmap and a searchable history of past dictations.
-- **Private by design.** Your API key is stored in the macOS Keychain. History stays on your machine.
+- **Private by design.** Speech is transcribed on your Mac with Apple's on-device model, so your audio is never sent anywhere. An API key, if you add one, is stored in the macOS Keychain, and only the text goes to that provider for cleanup. History stays on your machine.
 
 ## How it works
 
 ```
-Hotkey  →  Record mic  →  Groq Whisper (speech to text)  →  Groq Llama (cleanup)  →  Paste into focused app
+Hotkey  →  Record mic  →  Apple on-device speech (speech to text)  →  optional AI cleanup  →  Paste into focused app
 ```
 
 1. A listen-only global event tap watches for your hotkey.
 2. The microphone is recorded as 16 kHz mono audio and kept in memory.
-3. The audio is sent to Groq's `whisper-large-v3` for transcription.
-4. The text goes to `llama-3.1-8b-instant` with a strict cleanup prompt. If cleanup fails, the raw transcript is pasted instead.
+3. The audio is transcribed on your Mac by Apple's Speech framework (SpeechAnalyzer on macOS 26+). It is never uploaded.
+4. If AI cleanup is on and you added a key, the text (not the audio) goes to your chosen provider (Groq, Grok, Claude or Gemini) with a strict cleanup prompt. If cleanup fails, the raw transcript is pasted instead.
 5. The result is pasted with a synthesized Cmd+V.
 
 ## Requirements
 
 - macOS 14 (Sonoma) or later, Apple Silicon or Intel
 - Swift toolchain (Xcode or Command Line Tools) to build from source
-- A free [Groq API key](https://console.groq.com)
-- An internet connection
+- Optional: an API key for AI cleanup from Groq (free), Grok (xAI), Claude (Anthropic) or Gemini (Google). Without one, dictation runs on-device with no cleanup.
 
 ## Install
 
@@ -78,7 +77,7 @@ Always launch the `.app` with `open` or by double-clicking it. Running the binar
 ## Setup
 
 1. Launch the app. A menu-bar icon appears.
-2. Paste your Groq API key when prompted. You can change it later from the menu: **Set Groq API key…**
+2. Pick a provider and paste its API key when prompted, or skip and use the raw transcript. You can add, test, update or remove keys later in **Settings** (menu: **AI provider & key…**).
 3. Grant the three permissions macOS asks for:
 
    | Permission | Why it's needed |
@@ -115,7 +114,9 @@ Sources/WisprLite/
   main.swift       App delegate, menu bar, permissions, orchestration
   Hotkey.swift     Global hotkey with hold and double-tap detection
   Recorder.swift   Microphone capture to 16 kHz mono WAV
-  Groq.swift       Whisper and Llama requests, vocabulary
+  Local.swift      On-device speech to text (Apple Speech framework)
+  Providers.swift  Optional AI cleanup providers (Groq, Grok, Claude, Gemini)
+  Vocabulary.swift Custom vocabulary file
   Paster.swift     Paste-target check, clipboard-safe paste
   Overlay.swift    Floating pill and result card
   Sounds.swift     Start and stop sounds
@@ -138,6 +139,5 @@ Issues and pull requests are welcome. For a bigger change, please open an issue 
 
 ## Acknowledgements
 
-- [Groq](https://groq.com) for fast hosted inference
-- [OpenAI Whisper](https://github.com/openai/whisper) for speech recognition
-- [Meta Llama](https://www.llama.com) for text cleanup
+- Apple's Speech framework for on-device speech recognition
+- [Groq](https://groq.com), [xAI](https://x.ai), [Anthropic](https://www.anthropic.com) and [Google](https://ai.google.dev) for optional text cleanup

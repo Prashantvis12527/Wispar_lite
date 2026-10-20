@@ -1,6 +1,6 @@
-# Cleanup prompt and custom vocabulary (`Groq.swift`)
+# Cleanup prompt and custom vocabulary (`Providers.swift`, `Vocabulary.swift`)
 
-Read this for the Llama cleanup prompt, the AI cleanup toggle, or the vocabulary file.
+Read this for the cleanup prompt, the AI cleanup toggle, or the vocabulary file.
 
 ## Cleanup prompt
 
@@ -8,9 +8,4 @@ The Llama prompt adds punctuation and capitalization, removes filler words (um, 
 
 ## Custom vocabulary
 
-`~/.wisprlite/vocabulary.txt` holds one name or term per line (the file is created with `WisprLite` in it). Its words are sent as Whisper's `prompt` hint ("Terms: …") and appended to the cleanup prompt for correct spelling. Menu bar -> "Edit vocabulary…" opens it. It is re-read on every dictation, so no restart is needed. The `Vocabulary` enum is in `Groq.swift`.
-
-## Prompt-echo guard
-
-Whisper may echo the vocabulary hint back when there is little or no speech. `Vocabulary.isPromptEcho(_:)` returns true when the transcript consists only of vocabulary words (or "Terms"); `main.swift` then drops the dictation silently (logged as "dropped: prompt echo"). Side effect: dictating only a vocabulary word is dropped too.
-
+`~/.wisprlite/vocabulary.txt` holds one name or term per line (the file is created with `WisprLite` in it). Its words are passed to Apple's analyzer as contextual strings (which it largely ignores, see `transcription/on-device.md`) and appended to the cleanup prompt for correct spelling. Menu bar -> "Edit vocabulary…" opens it. It is re-read on every dictation, so no restart is needed. The `Vocabulary` enum is in `Vocabulary.swift`.

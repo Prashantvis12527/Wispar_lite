@@ -2,14 +2,14 @@
 
 A lightweight macOS push-to-talk dictation tool. Hold a hotkey, speak, release, and the transcribed text is pasted into whatever app has focus.
 
-**What it solves:** voice dictation tools are often heavy desktop apps with large memory footprints and a lot of UI. WisprLite does one job, turning speech into text in any app, as a small native Swift menu-bar agent with no window, no Dock icon and no bundled speech model. Transcription and cleanup are done by Groq's hosted models, so nothing large is loaded locally.
+**What it solves:** voice dictation tools are often heavy desktop apps with large memory footprints and a lot of UI. WisprLite does one job, turning speech into text in any app, as a small native Swift menu-bar agent with no window, no Dock icon and no bundled speech model. Transcription uses Apple's on-device speech model, held by a system helper that only exists while you dictate; optional text cleanup is done by a hosted model (Groq, Grok, Claude or Gemini).
 
-**Priorities, in order:** (1) low memory use, (2) accurate transcription of what was actually said, (3) light cleanup (punctuation, filler words). No paid services, English only, latest macOS only.
+**Priorities, in order:** (1) low memory use, (2) accurate transcription of what was actually said, (3) light cleanup (punctuation, filler words). Audio is always transcribed on-device. No paid services, English only, latest macOS only.
 
 ## How it works (pipeline)
 
 ```
-Hotkey (default Right Option)  ->  record mic  ->  Groq Whisper (speech to text)
+Hotkey (default Right Option)  ->  record mic  ->  Apple on-device speech (speech to text)
                                   ->  Groq Llama (light cleanup)  ->  paste into focused app
 ```
 
@@ -18,9 +18,9 @@ Hotkey (default Right Option)  ->  record mic  ->  Groq Whisper (speech to text)
    - Double-tap within 0.5 s: recording locks on; one more tap stops and pastes.
    - A single short tap is ignored and discards the recording.
 2. **Record** (`Recorder.swift`): `AVAudioEngine` microphone tap, converted with `AVAudioConverter` to 16 kHz mono 16-bit PCM, wrapped as an in-memory WAV. The engine exists only while recording, so idle cost is about zero. `lastPeak` stores the loudest sample.
-3. **Silence guard** (`main.swift`): if `lastPeak <= 300`, nothing is sent. A transcript that is only an echo of the vocabulary hint is also dropped. Whisper hallucinates "Thank you." on silence. Quiet room noise (an accidental press) is dropped silently; an alert is shown only for a dead mic (`lastPeak < 10`).
-4. **Transcribe** (`Groq.swift`): multipart POST of the WAV to Groq's Whisper endpoint.
-5. **Cleanup** (`Groq.swift`): the raw text goes to a Groq Llama chat model with a strict prompt. If cleanup fails, the raw transcript is pasted instead.
+3. **Silence guard** (`main.swift`): if `lastPeak <= 300`, nothing is sent. Quiet room noise (an accidental press) is dropped silently; an alert is shown only for a dead mic (`lastPeak < 10`).
+4. **Transcribe** (`Local.swift`): on-device only, Apple `SpeechAnalyzer`/`SpeechTranscriber` on macOS 26+ (`SFSpeechRecognizer`, forced on-device, before that). Audio never leaves the Mac. See `transcription/on-device.md`.
+5. **Cleanup** (`Providers.swift`, optional): the raw text (never audio) goes to the chosen provider (Groq, Grok, Claude or Gemini) with a strict prompt. If cleanup fails, the raw transcript is pasted instead.
 6. **Paste** (`Paster.swift`): `hasPasteTarget()` checks via Accessibility that an editable text element has focus (see `.claude/features/paste/paste-target.md`). If so, it saves the clipboard, sets the text (with a leading space if it would glue onto the previous word, see `.claude/features/paste/paste.md`), sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s. If not, the result card is shown instead (see `.claude/features/overlay/result-card.md`).
 
 ## Where the details live
@@ -37,8 +37,9 @@ Before editing a feature, read only the file that matches the task. Paths are un
 | The Settings tab | `dashboard/settings.md` |
 | Pasting, spacing between dictations, clipboard restore | `paste/paste.md` |
 | Deciding paste vs. result card (`hasPasteTarget`, focus roles, browsers, Finder) | `paste/paste-target.md` |
+| Speech to text: engine, English model asset, RAM, latency, accuracy, benchmark | `transcription/on-device.md` |
 | Hotkey, hold / double-tap, recording a new key | `hotkey/hotkey.md` |
-| Groq key, Keychain, rate limits, model names, API calls | `groq/api-key.md` |
+| Providers (Groq/Grok/Claude/Gemini), keys, Keychain, onboarding, model names, API calls, self-test | `groq/api-key.md` |
 | Cleanup prompt, AI cleanup toggle, vocabulary file | `groq/cleanup-and-vocabulary.md` |
 | Start/stop sounds | `sounds/sounds.md` |
 | App icon, menu-bar glyph | `branding/logo.md` |
@@ -55,8 +56,8 @@ When you add a feature, give it a file here and add a row to this table instead 
 | Audio | `AVFoundation` (`AVAudioEngine`, `AVAudioConverter`) |
 | Hotkey | `CoreGraphics` `CGEventTap` (listen-only) |
 | Paste | `NSPasteboard` plus synthesized `CGEvent` Cmd+V |
-| Speech to text | Groq cloud, `whisper-large-v3` |
-| Cleanup | Groq cloud, `llama-3.1-8b-instant` |
+| Speech to text | Apple Speech framework, on-device (`SpeechAnalyzer` on macOS 26+) |
+| Cleanup | Groq `llama-3.1-8b-instant`, xAI Grok, Anthropic Claude or Google Gemini (user's choice) |
 | Network | `URLSession`, no third-party dependencies |
 | Secrets | macOS Keychain |
 | Target | macOS 14+, built and tested on macOS 27 / Apple Silicon |
@@ -76,11 +77,14 @@ wispar_flow/
     main.swift               App delegate, menu bar (logo glyph + state icons), permissions, orchestration, Debug logging
     Hotkey.swift             global hotkey (configurable) hold / double-tap detection
     Recorder.swift           mic capture -> 16 kHz mono WAV, peak and live level
-    Groq.swift               Groq Whisper + Llama calls, Vocabulary
+    Vocabulary.swift         user vocabulary file (~/.wisprlite/vocabulary.txt)
+    Providers.swift          Provider enum (Groq/Grok/Claude/Gemini), Cleanup calls, key verify/test, ProviderError
+    SelfTest.swift           --selftest terminal check of one provider (no audio)
+    Local.swift              on-device speech to text (SpeechAnalyzer / SFSpeechRecognizer), speech-model asset check and install
     Paster.swift             paste-target check, clipboard-safe Cmd+V paste
     Overlay.swift            floating pill (edge-attached, glowing bars) and result card with Copy
     Sounds.swift             start/stop feedback sounds
-    Keychain.swift           API key storage and lookup
+    Keychain.swift           per-provider API key storage and lookup
     History.swift            append-only ~/.wisprlite/history.jsonl, plus Stats (WPM, total words, streaks)
     Dashboard.swift          Insights / History / Settings window (built on open, freed on close)
 ```
@@ -88,6 +92,7 @@ wispar_flow/
 ## Permissions (all required)
 
 - **Microphone:** to record. If not yet decided, the app requests it; if denied, an alert explains how to fix it.
+- **Speech Recognition:** only on macOS 14-25 (the SFSpeechRecognizer fallback). Not needed on macOS 26+.
 - **Accessibility:** to send the Cmd+V paste.
 - **Input Monitoring:** for the global hotkey. Without it, the hotkey does nothing and no "Tink" plays.
 
@@ -110,20 +115,19 @@ If permissions get stuck: `tccutil reset All com.prashant.wisprlite`, relaunch, 
 
 ## Debugging
 
-- `~/Library/Logs/WisprLite/log.txt`: one entry per dictation with the mic peak, the raw Whisper text and the cleaned text. Compare RAW and CLEANED to see which stage caused a bad result. `paste app=...` lines show how the leading-space decision was made.
+- `~/Library/Logs/WisprLite/log.txt`: one entry per dictation with the mic peak, the raw on-device transcript and the cleaned text. Compare RAW and CLEANED to see which stage caused a bad result. `paste app=...` lines show how the leading-space decision was made.
 - `~/Library/Logs/WisprLite/last.wav`: the most recent recording, playable in any audio app.
 - RAM check: `footprint $(pgrep WisprLite)`.
 
 ## Gotchas learned along the way
 
-- A "Thank you" output with every dictation means silent audio reached Whisper (mic permission missing or no input). The peak check now catches this.
+- Silent audio can make speech engines invent text, so the peak check drops near-silent recordings before transcribing.
 - Menu-bar agents have no main menu, so Cmd+V/C/X/A didn't work in the app's own dialogs until an Edit menu was added in `main.swift`.
-- Made-up or rare words (like the app's own name) are mis-heard by Whisper. Add them to the vocabulary file.
-- Whisper models, and Llama model names on Groq, change over time. Update the constants in `Groq.swift` if calls fail.
+- Made-up or rare words (like the app's own name) are mis-heard locally, and Apple's analyzer largely ignores vocabulary hints (see `transcription/on-device.md`). The vocabulary file still helps AI cleanup spell them.
+- Model names on every provider change over time. Update `Provider.cleanupModel` if calls fail.
 - Launch at login registers the app at its current path (`SMAppService.mainApp`). Move `WisprLite.app` to its final location before enabling it. See `.claude/features/dashboard/settings.md`.
 
 ## Not built yet
 
-- Offline fallback (Apple on-device speech recognition).
-- Gemini free-tier fallback.
+- Live testing of the Claude and Gemini integrations (Grok status: see `groq/api-key.md`).
 - Notarization or a real Developer ID signature (not needed for personal use).
