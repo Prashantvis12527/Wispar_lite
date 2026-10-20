@@ -21,7 +21,7 @@ Hotkey (default Right Option)  ->  record mic  ->  Groq Whisper (speech to text)
 3. **Silence guard** (`main.swift`): if `lastPeak <= 300`, nothing is sent. A transcript that is only an echo of the vocabulary hint is also dropped. Whisper hallucinates "Thank you." on silence. Quiet room noise (an accidental press) is dropped silently; an alert is shown only for a dead mic (`lastPeak < 10`).
 4. **Transcribe** (`Groq.swift`): multipart POST of the WAV to Groq's Whisper endpoint.
 5. **Cleanup** (`Groq.swift`): the raw text goes to a Groq Llama chat model with a strict prompt. If cleanup fails, the raw transcript is pasted instead.
-6. **Paste** (`Paster.swift`): `hasPasteTarget()` checks via Accessibility that a text field or window has focus. If so, it saves the clipboard, sets the text (with a leading space if it would glue onto the previous word, see `.claude/features/paste/paste.md`), sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s. If not, the result card is shown instead (see `.claude/features/overlay/result-card.md`).
+6. **Paste** (`Paster.swift`): `hasPasteTarget()` checks via Accessibility that an editable text element has focus (see `.claude/features/paste/paste-target.md`). If so, it saves the clipboard, sets the text (with a leading space if it would glue onto the previous word, see `.claude/features/paste/paste.md`), sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s. If not, the result card is shown instead (see `.claude/features/overlay/result-card.md`).
 
 ## Where the details live
 
@@ -36,6 +36,7 @@ Before editing a feature, read only the file that matches the task. Paths are un
 | Past dictations list, Copy/Delete, history file | `dashboard/history.md` |
 | The Settings tab | `dashboard/settings.md` |
 | Pasting, spacing between dictations, clipboard restore | `paste/paste.md` |
+| Deciding paste vs. result card (`hasPasteTarget`, focus roles, browsers, Finder) | `paste/paste-target.md` |
 | Hotkey, hold / double-tap, recording a new key | `hotkey/hotkey.md` |
 | Groq key, Keychain, rate limits, model names, API calls | `groq/api-key.md` |
 | Cleanup prompt, AI cleanup toggle, vocabulary file | `groq/cleanup-and-vocabulary.md` |
