@@ -1,3 +1,47 @@
+# Build artifacts
 .build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
 WisprLite.app/
+*.dSYM/
+*.o
+*.icns
+
+# macOS metadata
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Secrets and local environment
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.mobileprovision
+secrets.*
+credentials.*
+
+# Logs, recordings, private user data
+*.log
+logs/
+*.wav
+*.jsonl
+vocabulary.txt
+
+# Temp / editor / local Claude state
+*.tmp
+*.swp
+*~
+.idea/
+.vscode/
+graphify-out/
+.claude/settings.local.json
+.claude/projects/
