@@ -6,8 +6,10 @@ protocol DashboardHost: AnyObject {
     var isFloatingOn: Bool { get }
     var currentPosition: Overlay.Position { get }
     var hotkeyName: String { get }
+    var isLaunchAtLoginOn: Bool { get }
     func setCleanup(_ on: Bool)
     func setFloating(_ on: Bool)
+    func setLaunchAtLogin(_ on: Bool)
     func setPosition(_ pos: Overlay.Position)
     func changeHotkey()
     func openKeyDialog()
@@ -502,6 +504,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTabl
         let general = group("General", [
             setting("Hotkey", "Hold to talk, double-tap to lock on", buttons: [hotkeyValue, button("Change…", #selector(changeHotkey))]),
             setting("AI cleanup", "Fix punctuation and remove filler words", control: toggle(host.isCleanupOn, #selector(cleanupToggled(_:)))),
+            setting("Launch at login", "Start WisprLite when you log in", control: toggle(host.isLaunchAtLoginOn, #selector(launchToggled(_:)))),
         ])
         let pill = group("Floating pill", [
             setting("Floating icon", "Keep the idle pill on screen", control: toggle(host.isFloatingOn, #selector(floatingToggled(_:)))),
@@ -570,6 +573,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTabl
     }
 
     @objc private func cleanupToggled(_ s: NSSwitch) { host?.setCleanup(s.state == .on) }
+    @objc private func launchToggled(_ s: NSSwitch) { host?.setLaunchAtLogin(s.state == .on) }
     @objc private func floatingToggled(_ s: NSSwitch) { host?.setFloating(s.state == .on) }
     @objc private func saveTextToggled(_ s: NSSwitch) { History.saveText = s.state == .on }
     @objc private func positionPicked(_ p: NSPopUpButton) {

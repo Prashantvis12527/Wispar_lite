@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import ServiceManagement
 
 final class App: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -10,6 +11,7 @@ final class App: NSObject, NSApplicationDelegate {
     private var lastText = ""
     private var recording = false
     private var cleanupItem: NSMenuItem!
+    private var loginItem: NSMenuItem!
     private var floatItem: NSMenuItem!
     private var positionMenu: NSMenu!
     private var hotkeyHeader: NSMenuItem!
@@ -75,6 +77,10 @@ final class App: NSObject, NSApplicationDelegate {
         positionRoot.submenu = positionMenu
         menu.addItem(positionRoot)
         refreshPositionMenu()
+        loginItem = NSMenuItem(title: "Launch at login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem.target = self
+        loginItem.state = launchAtLoginEnabled ? .on : .off
+        menu.addItem(loginItem)
         let copyLast = NSMenuItem(title: "Copy last dictation", action: #selector(copyLast), keyEquivalent: "")
         copyLast.target = self
         menu.addItem(copyLast)
@@ -86,6 +92,7 @@ final class App: NSObject, NSApplicationDelegate {
         menu.addItem(vocab)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.delegate = self
         statusItem.menu = menu
 
         // Menu-bar agents have no main menu, so Cmd+C/V/X/A don't work in our own dialogs without this.
@@ -286,6 +293,10 @@ final class App: NSObject, NSApplicationDelegate {
         NSPasteboard.general.setString(lastText, forType: .string)
     }
 
+    private var launchAtLoginEnabled: Bool { SMAppService.mainApp.status == .enabled }
+
+    @objc private func toggleLaunchAtLogin() { setLaunchAtLogin(!launchAtLoginEnabled) }
+
     @objc private func toggleCleanup() {
         cleanupEnabled.toggle()
         cleanupItem.state = cleanupEnabled ? .on : .off
@@ -320,6 +331,20 @@ extension App: DashboardHost {
     var isFloatingOn: Bool { floatingEnabled }
     var currentPosition: Overlay.Position { iconPosition }
     var hotkeyName: String { Hotkey.name(for: hotkeyCode) }
+    var isLaunchAtLoginOn: Bool { launchAtLoginEnabled }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            notify("Couldn't \(on ? "enable" : "disable") launch at login: \(error.localizedDescription)")
+        }
+        if on, SMAppService.mainApp.status == .requiresApproval {
+            notify("Approve WisprLite in System Settings > General > Login Items to finish enabling launch at login.")
+        }
+        loginItem.state = launchAtLoginEnabled ? .on : .off
+        dashboard.reload()
+    }
 
     func setCleanup(_ on: Bool) {
         cleanupEnabled = on
@@ -341,6 +366,11 @@ extension App: DashboardHost {
     func changeHotkey() { recordHotkey() }
     func openKeyDialog() { setKey() }
     func openVocabulary() { editVocab() }
+}
+
+extension App: NSMenuDelegate {
+    // The user can change the login item in System Settings, so re-read it each time the menu opens.
+    func menuWillOpen(_ menu: NSMenu) { loginItem.state = launchAtLoginEnabled ? .on : .off }
 }
 
 let app = NSApplication.shared

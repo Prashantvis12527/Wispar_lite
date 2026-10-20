@@ -119,10 +119,10 @@ If permissions get stuck: `tccutil reset All com.prashant.wisprlite`, relaunch, 
 - Menu-bar agents have no main menu, so Cmd+V/C/X/A didn't work in the app's own dialogs until an Edit menu was added in `main.swift`.
 - Made-up or rare words (like the app's own name) are mis-heard by Whisper. Add them to the vocabulary file.
 - Whisper models, and Llama model names on Groq, change over time. Update the constants in `Groq.swift` if calls fail.
+- Launch at login registers the app at its current path (`SMAppService.mainApp`). Move `WisprLite.app` to its final location before enabling it. See `.claude/features/dashboard/settings.md`.
 
 ## Not built yet
 
 - Offline fallback (Apple on-device speech recognition).
-- Launch at login.
 - Gemini free-tier fallback.
 - Notarization or a real Developer ID signature (not needed for personal use).
