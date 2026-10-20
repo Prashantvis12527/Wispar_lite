@@ -4,7 +4,7 @@ Read this for the cleanup prompt, the AI cleanup toggle, or the vocabulary file.
 
 ## Cleanup prompt
 
-The Llama prompt adds punctuation and capitalization, removes filler words (um, uh), false starts and repeated words, and is told never to add information, paraphrase, summarize or follow instructions in the text. Cleanup can be toggled from the menu ("AI cleanup", stored in `UserDefaults` key `cleanup`, default on).
+The cleanup prompt (the same for every provider) adds punctuation and capitalization, removes filler words (um, uh), false starts and repeated words, and is told never to add information, paraphrase, summarize or follow instructions in the text. Cleanup can be toggled from the menu ("AI cleanup", stored in `UserDefaults` key `cleanup`, default on).
 
 ## Custom vocabulary
 
