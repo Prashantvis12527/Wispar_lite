@@ -29,6 +29,14 @@ final class App: NSObject, NSApplicationDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "cleanup") }
     }
 
+    /// Which provider does AI cleanup. Defaults to Groq so existing installs behave as before.
+    private var aiProvider: Provider {
+        get { Provider(rawValue: UserDefaults.standard.string(forKey: "aiProvider") ?? "") ?? .groq }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "aiProvider") }
+    }
+
+    private var lastCleanupAlert = ""
+
     private var floatingEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "floatingIcon") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "floatingIcon") }
@@ -84,7 +92,7 @@ final class App: NSObject, NSApplicationDelegate {
         let copyLast = NSMenuItem(title: "Copy last dictation", action: #selector(copyLast), keyEquivalent: "")
         copyLast.target = self
         menu.addItem(copyLast)
-        let key = NSMenuItem(title: "Set Groq API key…", action: #selector(setKey), keyEquivalent: "")
+        let key = NSMenuItem(title: "AI provider & key…", action: #selector(showSettings), keyEquivalent: "")
         key.target = self
         menu.addItem(key)
         let vocab = NSMenuItem(title: "Edit vocabulary…", action: #selector(editVocab), keyEquivalent: "")
@@ -117,7 +125,8 @@ final class App: NSObject, NSApplicationDelegate {
         if !hotkey.install() {
             notify("Grant Input Monitoring in System Settings, then relaunch")
         }
-        if Keychain.load() == nil { setKey() }
+        if Provider.allCases.allSatisfy({ Keychain.load($0) == nil }) && !UserDefaults.standard.bool(forKey: "onboarded") { runOnboarding() }
+        refreshSpeechAssets()
     }
 
     /// Idle ("mic") shows the WisprLite glyph; recording and processing keep system symbols as state feedback.
@@ -178,23 +187,29 @@ final class App: NSObject, NSApplicationDelegate {
             notify("The mic captured only silence (level \(recorder.lastPeak)). Check Microphone permission and the selected input device in System Settings > Sound > Input.")
             return
         }
-        let cleanup = cleanupEnabled
+        let provider = aiProvider
+        var cleanup = cleanupEnabled
+        if cleanup && Keychain.load(provider) == nil {
+            cleanup = false
+            promptForKeyForCleanup()
+        }
         let peak = recorder.lastPeak
         let seconds = Double(max(wav.count - 44, 0)) / 32_000   // 16 kHz, 16-bit mono WAV
         Debug.saveLast(wav)
         Task {
             do {
-                var text = try await Groq.transcribe(wav: wav)
+                var text = try await self.transcribeOnDevice(wav)
                 let raw = text
-                if Vocabulary.isPromptEcho(text) {   // Whisper echoed its vocabulary hint: nothing was really said
-                    Debug.log(peak: peak, raw: raw, cleaned: "(dropped: prompt echo)")
-                    await MainActor.run { self.setIcon("mic") }
-                    return
-                }
+                var cleanupError: Error?
                 if !text.isEmpty && cleanup {
-                    text = (try? await Groq.cleanup(text)) ?? text   // fall back to raw on failure
+                    do { text = try await Cleanup.run(text, provider: provider) }
+                    catch {   // keep the raw transcript; report below, after it has been pasted
+                        cleanupError = error
+                        Debug.note("\(provider.title) cleanup failed: \(error.localizedDescription)")
+                    }
                 }
                 let final = text
+                let failure = cleanupError
                 Debug.log(peak: peak, raw: raw, cleaned: final)
                 await MainActor.run {
                     self.setIcon("mic")
@@ -203,10 +218,67 @@ final class App: NSObject, NSApplicationDelegate {
                     History.add(text: final, seconds: seconds)
                     self.dashboard.reload()
                     if Paster.hasPasteTarget() { Paster.paste(final) } else { self.overlay.showCard(final) }
+                    if let e = failure { self.reportCleanupFailure(e, provider: provider) }
                 }
             } catch {
-                await MainActor.run { self.setIcon("mic"); self.notify(error.localizedDescription) }
+                await MainActor.run {
+                    self.setIcon("mic")
+                    self.notify("\(error.localizedDescription)\n\nYour recording is saved at ~/Library/Logs/WisprLite/last.wav.")
+                }
             }
+        }
+    }
+
+    // MARK: On-device speech model
+
+    /// "installed", "downloadable", ... as last seen; refreshed at launch and after an install.
+    private var speechAssets: Local.Assets = .installed
+
+    private func refreshSpeechAssets() {
+        Task {
+            let a = await Local.assets()
+            await MainActor.run { self.speechAssets = a; self.dashboard.reload() }
+        }
+    }
+
+    /// Transcribes on this Mac. If Apple's English model is missing, offers the one-time system install and then
+    /// transcribes the same recording, so the dictation that triggered the prompt isn't lost.
+    private func transcribeOnDevice(_ wav: Data) async throws -> String {
+        do { return try await Local.transcribe(wav: wav) }
+        catch LocalError.assetsMissing {
+            guard await askToInstallSpeechModel() else { throw LocalError.assetsMissing }
+            try await Local.installAssets()
+            refreshSpeechAssets()
+            return try await Local.transcribe(wav: wav)
+        }
+    }
+
+    @MainActor private func askToInstallSpeechModel() -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Install Apple's English speech model?"
+        alert.informativeText = "WisprLite transcribes on this Mac with Apple's speech model. It isn't installed yet. macOS downloads it once (no audio is sent anywhere), then dictation works offline."
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Not now")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    func installSpeechModel() {
+        Task {
+            guard await askToInstallSpeechModel() else { return }
+            do { try await Local.installAssets() } catch { await MainActor.run { self.notify("Couldn't install the speech model: \(error.localizedDescription)") } }
+            refreshSpeechAssets()
+        }
+    }
+
+    /// Transient failures (rate limit, network, 5xx) are only logged; problems the user can fix get one alert per distinct message.
+    private func reportCleanupFailure(_ error: Error, provider: Provider) {
+        guard let e = error as? ProviderError, e.isConfigProblem else { return }
+        let msg = e.localizedDescription
+        guard msg != lastCleanupAlert else { return }
+        lastCleanupAlert = msg
+        DispatchQueue.main.async {
+            self.notify("AI cleanup with \(provider.title) failed: \(msg).\n\nYour dictation was pasted without cleanup. Check the key or provider in Settings.")
         }
     }
 
@@ -298,23 +370,143 @@ final class App: NSObject, NSApplicationDelegate {
     @objc private func toggleLaunchAtLogin() { setLaunchAtLogin(!launchAtLoginEnabled) }
 
     @objc private func toggleCleanup() {
-        cleanupEnabled.toggle()
+        setCleanup(!cleanupEnabled)
         cleanupItem.state = cleanupEnabled ? .on : .off
         dashboard.reload()
     }
 
-    @objc private func setKey() {
+    // MARK: AI provider and key (optional)
+
+    /// Dialog with an optional provider picker and a secure key field. Returns nil if cancelled.
+    private func askForKey(title: String, info: String, primary: String, cancel: String,
+                           provider: Provider, chooseProvider: Bool) -> (Provider, String)? {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Groq API key"
-        alert.informativeText = "Free key from console.groq.com. Stored in your Keychain."
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
+        alert.messageText = title
+        alert.addButton(withTitle: primary)
+        alert.addButton(withTitle: cancel)
+        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
+        for p in Provider.allCases { picker.addItem(withTitle: p.title) }
+        picker.selectItem(at: Provider.allCases.firstIndex(of: provider) ?? 0)
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        let hint = NSTextField(wrappingLabelWithString: "")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        let sync = { [unowned picker] in
+            let p = Provider.allCases[picker.indexOfSelectedItem]
+            hint.stringValue = p.consoleHint + " Stored in your Keychain. Only transcribed text is sent, for AI cleanup."
+        }
+        sync()
+        let handler = PickerHandler(sync)   // strong reference: NSControl targets are weak
+        picker.target = handler
+        picker.action = #selector(PickerHandler.changed)
+        let views: [NSView] = chooseProvider ? [picker, field, hint] : [field, hint]
+        alert.informativeText = info
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 320, height: chooseProvider ? 110 : 80)
+        for v in views { v.widthAnchor.constraint(equalToConstant: 320).isActive = true }
+        alert.accessoryView = stack
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return (Provider.allCases[picker.indexOfSelectedItem], field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// First launch: choose a provider and enter a key, or skip and dictate with on-device recognition only.
+    private func runOnboarding() {
+        let result = askForKey(
+            title: "Welcome to WisprLite",
+            info: "Dictation always runs on this Mac with Apple's speech recognition; your audio never leaves it. Add an API key to also clean up the text (punctuation, filler words), or skip and use the raw transcript. You can add a key later in Settings.",
+            primary: "Save key", cancel: "Skip, no AI cleanup", provider: aiProvider, chooseProvider: true)
+        UserDefaults.standard.set(true, forKey: "onboarded")
+        if let (p, key) = result, !key.isEmpty { storeKey(key, for: p) }
+    }
+
+    /// Add or update the key for a provider. Saving is followed by a live test so a typo is caught at once.
+    @objc private func setKey() { editKey(for: aiProvider, chooseProvider: Keychain.loadStored(aiProvider) == nil) }
+
+    private func editKey(for current: Provider, chooseProvider: Bool) {
+        let had = Keychain.loadStored(current) != nil
+        guard let (p, key) = askForKey(
+            title: had ? "Update \(current.title) API key" : "Add an API key",
+            info: had ? "Leave blank to keep the current key." : "",
+            primary: "Save", cancel: "Cancel", provider: current, chooseProvider: chooseProvider),
+              !key.isEmpty else { return }
+        storeKey(key, for: p)
+    }
+
+    private func storeKey(_ key: String, for p: Provider) {
+        guard Keychain.save(p, key) else {
+            notify("Couldn't save the key to your Keychain.")
+            return
+        }
+        aiProvider = p
+        UserDefaults.standard.set(true, forKey: "onboarded")
+        dashboard.reload()
+        Task {
+            let problem = await Cleanup.test(p, key: key)
+            await MainActor.run {
+                if let problem { self.notify("The \(p.title) key was saved, but the test failed.\n\n\(problem)") }
+            }
+        }
+    }
+
+    /// Tests the selected provider's key (or its environment variable) with a real cleanup call.
+    func testKey() {
+        let p = aiProvider
+        guard let key = Keychain.load(p) else { promptToAddKey("There's no \(p.title) API key to test yet."); return }
+        Task {
+            let problem = await Cleanup.test(p, key: key)
+            await MainActor.run { self.notify(problem ?? "The \(p.title) API key works.") }
+        }
+    }
+
+    func removeKey() {
+        let p = aiProvider
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Remove the \(p.title) API key?"
+        alert.informativeText = "It's deleted from your Keychain. AI cleanup will be unavailable until you add a key again."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            let v = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !v.isEmpty { Keychain.save(v) }
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Keychain.delete(p)
+        dashboard.reload()
+    }
+
+    private func promptToAddKey(_ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "API key needed"
+        alert.informativeText = message
+        alert.addButton(withTitle: "Add key…")
+        alert.addButton(withTitle: "Not now")
+        if alert.runModal() == .alertFirstButtonReturn { editKey(for: aiProvider, chooseProvider: true) }
+    }
+
+    /// AI cleanup was requested but the selected provider has no key: say so, rather than silently pasting uncleaned text.
+    /// This dictation is pasted without cleanup; the alert is deferred so it doesn't delay the transcription.
+    private func promptForKeyForCleanup() {
+        let p = aiProvider
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "AI cleanup needs an API key"
+            alert.informativeText = "No \(p.title) key is set, so this dictation was pasted without cleanup. Add a key (Grok, Claude, Gemini or Groq) to turn punctuation and filler-word cleanup on, or turn cleanup off to stop seeing this."
+            alert.addButton(withTitle: "Add key…")
+            alert.addButton(withTitle: "Turn off AI cleanup")
+            alert.addButton(withTitle: "Dismiss")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: self.editKey(for: p, chooseProvider: true)
+            case .alertSecondButtonReturn:
+                self.cleanupEnabled = false
+                self.cleanupItem.state = .off
+                self.dashboard.reload()
+            default: break
+            }
         }
     }
 
@@ -332,6 +524,23 @@ extension App: DashboardHost {
     var currentPosition: Overlay.Position { iconPosition }
     var hotkeyName: String { Hotkey.name(for: hotkeyCode) }
     var isLaunchAtLoginOn: Bool { launchAtLoginEnabled }
+    var hasKey: Bool { Keychain.load(aiProvider) != nil }
+    var currentProvider: Provider { aiProvider }
+    var transcriptionDetail: String {
+        switch speechAssets {
+        case .installed: return "\(Local.engineName). Audio never leaves your Mac."
+        case .downloadable: return "Apple's English speech model isn't installed yet"
+        case .downloading: return "Apple's English speech model is downloading"
+        case .unsupported: return "On-device English speech recognition isn't available on this Mac"
+        }
+    }
+    var needsSpeechModel: Bool { speechAssets == .downloadable }
+
+    func setProvider(_ p: Provider) {
+        aiProvider = p
+        lastCleanupAlert = ""
+        dashboard.reload()
+    }
 
     func setLaunchAtLogin(_ on: Bool) {
         do {
@@ -347,6 +556,13 @@ extension App: DashboardHost {
     }
 
     func setCleanup(_ on: Bool) {
+        if on && Keychain.load(aiProvider) == nil {
+            cleanupEnabled = false
+            cleanupItem.state = .off
+            promptToAddKey("AI cleanup uses a hosted model (Grok, Claude, Gemini or Groq), so it needs an API key.")
+            dashboard.reload()
+            return
+        }
         cleanupEnabled = on
         cleanupItem.state = on ? .on : .off
     }
@@ -365,12 +581,31 @@ extension App: DashboardHost {
 
     func changeHotkey() { recordHotkey() }
     func openKeyDialog() { setKey() }
+    func changeKey() { editKey(for: aiProvider, chooseProvider: false) }
     func openVocabulary() { editVocab() }
 }
 
 extension App: NSMenuDelegate {
     // The user can change the login item in System Settings, so re-read it each time the menu opens.
     func menuWillOpen(_ menu: NSMenu) { loginItem.state = launchAtLoginEnabled ? .on : .off }
+}
+
+/// Target for the provider popup inside the key dialog.
+final class PickerHandler: NSObject {
+    private let onChange: () -> Void
+    init(_ onChange: @escaping () -> Void) { self.onChange = onChange }
+    @objc func changed() { onChange() }
+}
+
+// `WisprLite --selftest <groq|xai|anthropic|gemini>`: exercises one provider from the terminal, then exits.
+if let i = CommandLine.arguments.firstIndex(of: "--selftest") {
+    SelfTest.run(CommandLine.arguments.dropFirst(i + 1).first ?? "")
+    exit(0)
+}
+
+if let i = CommandLine.arguments.firstIndex(of: "--bench") {
+    SelfTest.bench(Array(CommandLine.arguments.dropFirst(i + 1)))
+    exit(0)
 }
 
 let app = NSApplication.shared

@@ -28,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSUIElement</key><true/>
 <key>NSMicrophoneUsageDescription</key><string>WisprLite records your voice while you hold the hotkey.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>WisprLite transcribes your voice on this Mac using Apple's on-device speech recognition. Audio is never sent to a server.</string>
 </dict></plist>
 PLIST
 # A stable identity keeps macOS permissions (mic, accessibility) across rebuilds and restarts.
