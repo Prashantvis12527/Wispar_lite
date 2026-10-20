@@ -70,6 +70,7 @@ wispar_flow/
   Package.swift              SwiftPM manifest (one executable target, macOS 14+)
   build.sh                   builds release binary, creates WisprLite.app, builds AppIcon.icns, writes Info.plist, signs it
   CLAUDE.md                  this file (project overview for AI assistants)
+  README.md                  public GitHub README (install, setup, usage, privacy); no troubleshooting section, debugging notes live here
   Assets/                    logo: make_icon.swift draws icon_1024.png and the menubar glyph (re-run: swift Assets/make_icon.swift Assets)
   Sources/WisprLite/
     main.swift               App delegate, menu bar (logo glyph + state icons), permissions, orchestration, Debug logging

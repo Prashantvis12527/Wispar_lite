@@ -108,19 +108,6 @@ Rare words, product names and acronyms are easy for speech models to mishear. Li
 - History is stored locally at `~/.wisprlite/history.jsonl`. You can delete entries from the dashboard.
 - There is no analytics or telemetry.
 
-## Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| The hotkey does nothing | Grant **Input Monitoring** and relaunch the app |
-| Nothing is pasted | Grant **Accessibility**. If no text field is focused, use the result card's Copy button. |
-| Every dictation says "Thank you." | Silent audio is reaching Whisper. Check microphone permission and the input device. |
-| Permissions keep resetting | The app was ad-hoc signed. Create the `WisprLite Local` certificate, then run `tccutil reset All com.prashant.wisprlite`, relaunch and re-grant. |
-| "Groq rate limit hit" | You've reached the free-tier limit. Wait for it to reset or use another key. |
-| A model error from Groq | Model names change over time. Update the constants at the top of `Sources/WisprLite/Groq.swift`. |
-
-Logs are in `~/Library/Logs/WisprLite/log.txt`, and the latest recording is saved as `last.wav` in the same folder. Comparing the RAW and CLEANED lines in the log shows whether Whisper or the cleanup step caused a bad result.
-
 ## Project structure
 
 ```
