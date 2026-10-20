@@ -142,7 +142,7 @@ Per-feature design notes live in [`.claude/features/`](.claude/features), and [`
 ## Roadmap
 
 - [ ] Offline fallback using Apple's on-device speech recognition
-- [ ] Launch at login
+- [x] Launch at login
 - [ ] Gemini free-tier fallback
 - [ ] Notarized, prebuilt releases
 
