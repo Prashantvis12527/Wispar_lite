@@ -15,8 +15,9 @@ Groq gates models per organization: `llama-3.1-8b-instant` and `llama-3.3-70b-ve
 
 **Test status**
 - Groq: cleanup request rewritten in an earlier change; not re-run live. (Groq no longer does speech to text.)
-- Grok: `--selftest xai` with a real key (see Self-test below); status recorded in the PR/hand-off notes.
-- Claude and Gemini: **not tested with a live key.** Written from the official docs. Verified without a key: URLs, headers and the 401/400 auth-error path respond as expected on the real servers, and the response parser handles the documented shapes (`--selftest parse`). Still needs a live check: a successful generation, the model names, and (Claude) whether adaptive thinking on Haiku 5.5 adds noticeable latency.
+- Gemini: **confirmed working** with a real key (tested from the app's Settings, 2026-10-20).
+- Grok: **not yet tested with a real key** (`--selftest xai` once a key is saved).
+- Claude: **not tested with a live key.** Written from the official docs. Verified without a key: URLs, headers and the 401/400 auth-error path respond as expected on the real servers, and the response parser handles the documented shapes (`--selftest parse`). Still needs a live check for Claude: a successful generation, the model name, and whether adaptive thinking on Haiku 5.5 adds noticeable latency.
 
 **Where keys are stored:** the macOS login Keychain, as generic passwords. Service `com.prashant.wisprlite`; account `groq-api-key` (unchanged), `xai-api-key`, `anthropic-api-key`, `gemini-api-key`. Keys are never written to the repo, disk files or logs.
 

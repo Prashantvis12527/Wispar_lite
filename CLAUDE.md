@@ -10,7 +10,7 @@ A lightweight macOS push-to-talk dictation tool. Hold a hotkey, speak, release, 
 
 ```
 Hotkey (default Right Option)  ->  record mic  ->  Apple on-device speech (speech to text)
-                                  ->  Groq Llama (light cleanup)  ->  paste into focused app
+                                  ->  optional AI cleanup (Groq/Grok/Claude/Gemini, text only)  ->  paste into focused app
 ```
 
 1. **Hotkey** (`Hotkey.swift`): user-selectable (menu bar -> Hotkey; presets or "Record another key…"), default Right Option (keycode 61). Stored in `UserDefaults` key `hotkeyCode`. Watched globally via a listen-only `CGEventTap` on `flagsChanged` (modifiers) and `keyDown`/`keyUp` (regular keys like F5).
@@ -57,7 +57,7 @@ When you add a feature, give it a file here and add a row to this table instead 
 | Hotkey | `CoreGraphics` `CGEventTap` (listen-only) |
 | Paste | `NSPasteboard` plus synthesized `CGEvent` Cmd+V |
 | Speech to text | Apple Speech framework, on-device (`SpeechAnalyzer` on macOS 26+) |
-| Cleanup | Groq `llama-3.1-8b-instant`, xAI Grok, Anthropic Claude or Google Gemini (user's choice) |
+| Cleanup (optional) | Groq `openai/gpt-oss-20b`, xAI `grok-4.20-0309-non-reasoning`, Anthropic `claude-haiku-5-5` or Google `gemini-3.5-flash-lite` (user's choice; constants in `Provider.cleanupModel`) |
 | Network | `URLSession`, no third-party dependencies |
 | Secrets | macOS Keychain |
 | Target | macOS 14+, built and tested on macOS 27 / Apple Silicon |
@@ -89,12 +89,12 @@ wispar_flow/
     Dashboard.swift          Insights / History / Settings window (built on open, freed on close)
 ```
 
-## Permissions (all required)
+## Permissions
 
-- **Microphone:** to record. If not yet decided, the app requests it; if denied, an alert explains how to fix it.
+- **Microphone (required):** to record. If not yet decided, the app requests it; if denied, an alert explains how to fix it.
 - **Speech Recognition:** only on macOS 14-25 (the SFSpeechRecognizer fallback). Not needed on macOS 26+.
-- **Accessibility:** to send the Cmd+V paste.
-- **Input Monitoring:** for the global hotkey. Without it, the hotkey does nothing and no "Tink" plays.
+- **Accessibility (required):** to send the Cmd+V paste.
+- **Input Monitoring (required):** for the global hotkey. Without it, the hotkey does nothing and no "Tink" plays.
 
 ## Signing, and why it matters
 
@@ -111,6 +111,15 @@ open WisprLite.app                # run it (always launch the .app, never the ra
 
 Launch via `open` or double-click on the `.app`. Running the binary inside `Contents/MacOS` makes macOS attribute permissions to Terminal instead.
 
+Terminal helpers (neither records audio; both are documented in `groq/api-key.md` and `transcription/on-device.md`):
+
+```
+WisprLite.app/Contents/MacOS/WisprLite --selftest groq|xai|anthropic|gemini|parse   # one provider's key, endpoint and cleanup call
+WisprLite.app/Contents/MacOS/WisprLite --bench speechTranscriber file.wav...        # on-device engine latency, RAM, text
+```
+
+Use `open -n -W --stdout out.tsv WisprLite.app --args --bench sfSpeech ...` for the `sfSpeech` engine so macOS can show its permission prompt. A provider's env var (`GROQ_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) overrides its Keychain key.
+
 If permissions get stuck: `tccutil reset All com.prashant.wisprlite`, relaunch, and re-grant.
 
 ## Debugging
@@ -124,10 +133,13 @@ If permissions get stuck: `tccutil reset All com.prashant.wisprlite`, relaunch, 
 - Silent audio can make speech engines invent text, so the peak check drops near-silent recordings before transcribing.
 - Menu-bar agents have no main menu, so Cmd+V/C/X/A didn't work in the app's own dialogs until an Edit menu was added in `main.swift`.
 - Made-up or rare words (like the app's own name) are mis-heard locally, and Apple's analyzer largely ignores vocabulary hints (see `transcription/on-device.md`). The vocabulary file still helps AI cleanup spell them.
-- Model names on every provider change over time. Update `Provider.cleanupModel` if calls fail.
+- Model names on every provider change over time. Update `Provider.cleanupModel` if calls fail. Providers also gate models per account: on a free Groq account `llama-3.1-8b-instant` returned 404 and the gpt-oss models 403 until enabled in the org settings. A 403 shows as "denied access" with the provider's message; only 401 means a bad key.
+- `SpeechTranscriber.installedLocales` can list a language whose model is not installed. Trust `AssetInventory.status` (`Local.assets()`) instead.
+- `--bench sfSpeech` aborts if run directly from Terminal (no Speech permission attribution); launch it through `open`.
 - Launch at login registers the app at its current path (`SMAppService.mainApp`). Move `WisprLite.app` to its final location before enabling it. See `.claude/features/dashboard/settings.md`.
 
 ## Not built yet
 
-- Live testing of the Claude and Gemini integrations (Grok status: see `groq/api-key.md`).
+- Live testing of the Grok and Claude integrations with real keys (Gemini is confirmed working; Groq works once its model is enabled in the Groq console). Status is tracked in `groq/api-key.md`.
+- Benchmarking the macOS 14-25 `SFSpeechRecognizer` fallback, and comparing local accuracy against Whisper.
 - Notarization or a real Developer ID signature (not needed for personal use).
