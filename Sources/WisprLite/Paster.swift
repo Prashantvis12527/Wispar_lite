@@ -90,6 +90,7 @@ enum Paster {
         }
         pb.clearContents()
         pb.setString(text, forType: .string)
+        let ours = pb.changeCount
 
         let src = CGEventSource(stateID: .combinedSessionState)
         let down = CGEvent(keyboardEventSource: src, virtualKey: 9, keyDown: true) // 'v'
@@ -100,7 +101,8 @@ enum Paster {
         up?.post(tap: .cghidEventTap)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            guard !saved.isEmpty else { return }
+            // Something else was copied meanwhile: leave it. An empty `saved` still clears our text off.
+            guard pb.changeCount == ours else { return }
             pb.clearContents()
             for entry in saved {
                 let item = NSPasteboardItem()

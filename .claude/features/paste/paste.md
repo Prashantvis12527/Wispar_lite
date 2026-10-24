@@ -2,7 +2,7 @@
 
 Read this for how dictated text lands in the focused app: clipboard handling and the spacing between consecutive dictations. Paste-target detection is in `overlay/result-card.md`.
 
-- **Mechanism:** `Paster.paste` saves the clipboard, sets the text, sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s.
+- **Mechanism:** `Paster.paste` saves the clipboard, sets the text, sends Cmd+V via `CGEvent`, and restores the old clipboard after 0.35 s. If the clipboard was empty, it is cleared again so the dictation doesn't linger there (or in clipboard managers). The restore is skipped if `pb.changeCount` moved, meaning something else was copied in those 0.35 s.
 - **Leading space:** so consecutive dictations don't glue together ("word" + "Next" -> "wordNext"), `needsLeadingSpace()` decides whether to prepend one space.
   1. It reads the character before the caret through Accessibility (`characterBeforeCaret`: `AXSelectedTextRange` + `AXValue`). If that character is not whitespace or an opening bracket/quote/`/`/`-`, a space is added.
   2. A caret at position 0 counts as unknown (apps like VS Code report it unreliably), as does any app that exposes no text.
