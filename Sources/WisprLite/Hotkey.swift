@@ -32,7 +32,7 @@ final class Hotkey {
     var capture: ((Int64) -> Void)?
 
     var keyCode: Int64 = Hotkey.defaultKeyCode {
-        didSet { isDown = false; locked = false }
+        didSet { isDown = false; locked = false; chorded = false }
     }
     private let holdThreshold: TimeInterval = 0.35
     private let doubleTapWindow: TimeInterval = 0.5
@@ -41,6 +41,8 @@ final class Hotkey {
     private var pressTime = Date.distantPast
     private var lastTap = Date.distantPast
     private var locked = false
+    /// Set when a modifier hotkey is used in a shortcut (e.g. Right Option + e) during a press.
+    private var chorded = false
 
     func install() -> Bool {
         let mask = CGEventMask((1 << CGEventType.flagsChanged.rawValue)
@@ -70,6 +72,10 @@ final class Hotkey {
                     } else if type == .keyUp, flag == nil {
                         DispatchQueue.main.async { me.handle(down: false) }
                     }
+                } else if Hotkey.modifierFlags[me.keyCode] != nil,
+                          type == .keyDown || (type == .flagsChanged && flag.map { event.flags.contains($0) } == true) {
+                    // Another key or modifier pressed while a modifier hotkey is held: it's a shortcut, not dictation.
+                    DispatchQueue.main.async { me.chord() }
                 }
             }
             return Unmanaged.passUnretained(event)
@@ -91,10 +97,12 @@ final class Hotkey {
             isDown = true
             if locked { locked = false; onStop?(); return }
             pressTime = Date()
+            chorded = false
             onStart?()
         } else {
             guard isDown else { return }
             isDown = false
+            if chorded { chorded = false; return }   // shortcut release: not a stop, tap or double-tap
             if locked { return }
             let held = Date().timeIntervalSince(pressTime)
             if held >= holdThreshold {
@@ -107,5 +115,13 @@ final class Hotkey {
                 onCancel?()              // single short tap: ignore
             }
         }
+    }
+
+    /// Discards the recording started by this press, since the hotkey is being used as a normal modifier.
+    private func chord() {
+        guard isDown, !locked, !chorded else { return }
+        chorded = true
+        lastTap = .distantPast
+        onCancel?()
     }
 }
