@@ -25,6 +25,7 @@ final class Hotkey {
     static func name(for code: Int64) -> String { names[code] ?? "Key \(code)" }
 
     var onStart: (() -> Void)?
+    var onListen: (() -> Void)?   // show the listening feedback: the press became a hold, or recording locked on
     var onStop: (() -> Void)?     // finish and process
     var onCancel: (() -> Void)?   // discard
 
@@ -43,6 +44,8 @@ final class Hotkey {
     private var locked = false
     /// Set when a modifier hotkey is used in a shortcut (e.g. Right Option + e) during a press.
     private var chorded = false
+    /// Fires onListen once the press has lasted past the hold threshold, so a short tap never shows feedback.
+    private var listenTimer: DispatchWorkItem?
 
     func install() -> Bool {
         let mask = CGEventMask((1 << CGEventType.flagsChanged.rawValue)
@@ -99,9 +102,17 @@ final class Hotkey {
             pressTime = Date()
             chorded = false
             onStart?()
+            let timer = DispatchWorkItem { [weak self] in
+                guard let self, self.isDown, !self.locked, !self.chorded else { return }
+                self.onListen?()
+            }
+            listenTimer = timer
+            DispatchQueue.main.asyncAfter(deadline: .now() + holdThreshold, execute: timer)
         } else {
             guard isDown else { return }
             isDown = false
+            listenTimer?.cancel()
+            listenTimer = nil
             if chorded { chorded = false; return }   // shortcut release: not a stop, tap or double-tap
             if locked { return }
             let held = Date().timeIntervalSince(pressTime)
@@ -110,6 +121,7 @@ final class Hotkey {
             } else if Date().timeIntervalSince(lastTap) <= doubleTapWindow {
                 locked = true            // double-tap: keep recording
                 lastTap = .distantPast
+                onListen?()
             } else {
                 lastTap = Date()
                 onCancel?()              // single short tap: ignore
