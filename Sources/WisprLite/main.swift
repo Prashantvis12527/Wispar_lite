@@ -120,6 +120,7 @@ final class App: NSObject, NSApplicationDelegate {
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
 
         hotkey.onStart = { [weak self] in self?.startRecording() }
+        hotkey.onListen = { [weak self] in self?.showListening() }
         hotkey.onStop = { [weak self] in self?.finishRecording() }
         hotkey.onCancel = { [weak self] in self?.cancelRecording() }
         if !hotkey.install() {
@@ -163,6 +164,11 @@ final class App: NSObject, NSApplicationDelegate {
         }
         do { try recorder.start() } catch { notify("Mic error: \(error.localizedDescription)"); return }
         recording = true
+    }
+
+    /// Shows the pill and plays the start sound. Called once a press is a hold or a lock, not on every tap.
+    private func showListening() {
+        guard recording else { return }
         setIcon("mic.fill")
         Sounds.play(Sounds.start)
     }
