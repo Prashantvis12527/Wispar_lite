@@ -12,8 +12,18 @@ final class Recorder {
     var onLevel: ((CGFloat) -> Void)?
     private let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
 
-    func start() throws {
-        pcm = Data()
+    /// Engine start and stop run here, so starting the mic never blocks the main thread (and the pill).
+    private let queue = DispatchQueue(label: "wisprlite.recorder", qos: .userInteractive)
+
+    /// Starts the mic asynchronously; `onError` is called on the main queue if the engine fails to start.
+    func start(onError: @escaping (Error) -> Void) {
+        queue.async { [self] in
+            do { try startEngine() } catch { DispatchQueue.main.async { onError(error) } }
+        }
+    }
+
+    private func startEngine() throws {
+        lock.lock(); pcm = Data(); lock.unlock()
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
@@ -50,10 +60,13 @@ final class Recorder {
 
     /// Stops recording; returns WAV data, or nil if nothing meaningful was captured.
     func stop() -> Data? {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        lock.lock(); let data = pcm; pcm = Data(); lock.unlock()
+        let data: Data = queue.sync {   // waits for a start still in progress
+            engine?.inputNode.removeTap(onBus: 0)
+            engine?.stop()
+            engine = nil
+            lock.lock(); let data = pcm; pcm = Data(); lock.unlock()
+            return data
+        }
         guard data.count > 16000 * 2 / 4 else { return nil } // < 0.25 s
         lastPeak = data.withUnsafeBytes { raw in
             raw.bindMemory(to: Int16.self).reduce(0) { max($0, abs(Int($1))) }

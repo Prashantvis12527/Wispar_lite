@@ -22,6 +22,18 @@ final class Overlay: NSObject {
     private var timer: Timer?
     private var mode: Mode = .idle
     private var level: CGFloat = 0
+    /// Mouse is over the pill: it pops out so it is easy to click.
+    private var hovering = false
+
+    /// While the mouse is outside the panel but still in the hover zone, polls until it leaves (no flicker at the edge).
+    private var hoverWatch: Timer?
+    /// Small "Click to dictate" label shown above the pill after a short hover.
+    private var hint: NSPanel?
+    private var hintLabel: NSTextField?
+    private var hintDelay: DispatchWorkItem?
+
+    /// Clicking the pill: start a dictation, or stop and paste the running one.
+    var onClick: (() -> Void)?
 
     private var card: NSPanel?
     private var cardText = ""
@@ -48,10 +60,16 @@ final class Overlay: NSObject {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.level = .statusBar
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = false   // hover and click; the panel never becomes key, so focus stays in the target app
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.contentView = pill
+        pill.onHover = { [weak self] inside in self?.mouseMoved(inside: inside) }
+        pill.onClick = { [weak self] in
+            guard let self, self.mode != .processing else { return }
+            self.hideHint()
+            self.onClick?()
+        }
         panel.setFrame(frame(for: .idle), display: false)
         apply(animated: false)
     }
@@ -68,6 +86,7 @@ final class Overlay: NSObject {
             }
         }
         apply(animated: true)
+        if hovering { scheduleHint() } else { hideHint() }
     }
 
     /// Mic level 0...1, fed from the recorder.
@@ -76,12 +95,15 @@ final class Overlay: NSObject {
     // MARK: pill placement
 
     /// The pill's own rect (without glow padding) for a mode, attached to the chosen screen edge.
-    private func pillRect(for mode: Mode) -> NSRect {
+    private func pillRect(for mode: Mode) -> NSRect { pillRect(big: mode != .idle || hovering) }
+
+    private func pillRect(big: Bool) -> NSRect {
         let screen = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
-        let long = mode == .idle ? Overlay.idleLong : Overlay.activeLong
-        let short = mode == .idle ? Overlay.idleShort : Overlay.activeShort
+        let small = !big
+        let long = small ? Overlay.idleLong : Overlay.activeLong
+        let short = small ? Overlay.idleShort : Overlay.activeShort
         let size = position.vertical ? NSSize(width: short, height: long) : NSSize(width: long, height: short)
-        let inward: CGFloat = mode == .idle ? -6 : 8      // idle sits partly off the edge, active pops out
+        let inward: CGFloat = small ? -6 : 8      // idle sits partly off the edge, active or hovered pops out
         switch position {
         case .right:  return NSRect(x: screen.maxX - size.width - inward, y: screen.midY - size.height / 2, width: size.width, height: size.height)
         case .left:   return NSRect(x: screen.minX + inward, y: screen.midY - size.height / 2, width: size.width, height: size.height)
@@ -94,7 +116,125 @@ final class Overlay: NSObject {
         pillRect(for: mode).insetBy(dx: -Overlay.pad, dy: -Overlay.pad)
     }
 
-    private func apply(animated: Bool) {
+    // MARK: hover
+
+    /// Area that counts as "over the pill": the small and the big pill together, stretched to the screen edge.
+    /// Using one fixed area (instead of the panel, which changes size) keeps the pill from popping in and out.
+    private var hoverZone: NSRect {
+        let s = (NSScreen.main ?? NSScreen.screens[0]).frame
+        let z = pillRect(big: false).union(pillRect(big: true)).insetBy(dx: -Overlay.pad, dy: -Overlay.pad)
+        switch position {
+        case .bottom: return NSRect(x: z.minX, y: s.minY, width: z.width, height: z.maxY - s.minY)
+        case .top:    return NSRect(x: z.minX, y: z.minY, width: z.width, height: s.maxY - z.minY)
+        case .left:   return NSRect(x: s.minX, y: z.minY, width: z.maxX - s.minX, height: z.height)
+        case .right:  return NSRect(x: z.minX, y: z.minY, width: s.maxX - z.minX, height: z.height)
+        }
+    }
+
+    private func mouseMoved(inside: Bool) {
+        if inside {
+            hoverWatch?.invalidate(); hoverWatch = nil
+            setHovering(true)
+            return
+        }
+        // Left the panel: collapse only once the cursor is really out of the hover zone.
+        guard hoverWatch == nil else { return }
+        hoverWatch = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            if self.panel.frame.contains(NSEvent.mouseLocation) || self.hoverZone.contains(NSEvent.mouseLocation) { return }
+            t.invalidate(); self.hoverWatch = nil
+            self.setHovering(false)
+        }
+        hoverWatch?.fire()
+    }
+
+    private func setHovering(_ on: Bool) {
+        guard hovering != on else { return }
+        hovering = on
+        pill.hover = on
+        apply(animated: true, gentle: true)
+        if on { scheduleHint() } else { hideHint() }
+    }
+
+    /// Shows the hint after a short pause, so a cursor just passing by doesn't flash it.
+    private func scheduleHint() {
+        hintDelay?.cancel()
+        guard mode != .processing, card == nil else { hideHint(); return }
+        let text = mode == .listening ? "Click to stop and paste" : "Click to dictate"
+        if let label = hintLabel, hint?.isVisible == true, hint?.alphaValue ?? 0 > 0 {
+            label.stringValue = text
+            layoutHint()
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in self?.showHint(text) }
+        hintDelay = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    private func showHint(_ text: String) {
+        guard hovering else { return }
+        if hint == nil {
+            let label = NSTextField(labelWithString: text)
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            label.textColor = NSColor(white: 1, alpha: 0.92)
+            let bg = NSVisualEffectView()
+            bg.material = .hudWindow
+            bg.appearance = NSAppearance(named: .vibrantDark)
+            bg.state = .active
+            bg.wantsLayer = true
+            bg.layer?.cornerRadius = 8
+            bg.layer?.masksToBounds = true
+            bg.layer?.borderWidth = 0.5
+            bg.layer?.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
+            bg.addSubview(label)
+            let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            p.isOpaque = false
+            p.backgroundColor = .clear
+            p.hasShadow = true
+            p.level = .statusBar
+            p.ignoresMouseEvents = true
+            p.hidesOnDeactivate = false
+            p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            p.contentView = bg
+            hint = p
+            hintLabel = label
+        }
+        hintLabel?.stringValue = text
+        layoutHint()
+        guard let p = hint else { return }
+        p.alphaValue = 0
+        p.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.15; p.animator().alphaValue = 1 }
+    }
+
+    /// Sizes the hint to its text and places it beside the pill, on the screen side.
+    private func layoutHint() {
+        guard let p = hint, let label = hintLabel else { return }
+        let size = label.fittingSize
+        let w = ceil(size.width) + 20, h = ceil(size.height) + 10
+        label.frame = NSRect(x: 10, y: (h - size.height) / 2, width: ceil(size.width), height: ceil(size.height))
+        let pr = pillRect(big: true)
+        let gap: CGFloat = 8
+        let origin: NSPoint
+        switch position {
+        case .bottom: origin = NSPoint(x: pr.midX - w / 2, y: pr.maxY + gap)
+        case .top:    origin = NSPoint(x: pr.midX - w / 2, y: pr.minY - h - gap)
+        case .left:   origin = NSPoint(x: pr.maxX + gap, y: pr.midY - h / 2)
+        case .right:  origin = NSPoint(x: pr.minX - w - gap, y: pr.midY - h / 2)
+        }
+        p.setFrame(NSRect(origin: origin, size: NSSize(width: w, height: h)), display: true)
+    }
+
+    private func hideHint() {
+        hintDelay?.cancel(); hintDelay = nil
+        guard let p = hint, p.isVisible else { return }
+        NSAnimationContext.runAnimationGroup({ $0.duration = 0.12; p.animator().alphaValue = 0 },
+                                             completionHandler: {
+            if p.alphaValue == 0 { p.orderOut(nil) }   // skip if a new hover brought it back mid-fade
+        })
+    }
+
+    private func apply(animated: Bool, gentle: Bool = false) {
         let visible = mode != .idle || idleVisible
         let target = frame(for: mode)
         if visible { panel.orderFrontRegardless() }
@@ -104,8 +244,13 @@ final class Overlay: NSObject {
         }
         if animated {
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.22
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.1)   // slight overshoot = pop
+                if gentle {   // hover: smooth ease-out, no bounce
+                    ctx.duration = 0.18
+                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1)
+                } else {
+                    ctx.duration = 0.22
+                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.1)   // slight overshoot = pop
+                }
                 panel.animator().setFrame(target, display: true)
             }, completionHandler: finish)
         } else {
@@ -119,6 +264,7 @@ final class Overlay: NSObject {
     /// Shows the dictated text with a Copy button, next to the pill.
     func showCard(_ text: String) {
         dismissCard()
+        hideHint()
         cardText = text
 
         let width: CGFloat = 360, inset: CGFloat = 14
@@ -261,8 +407,21 @@ final class PillView: NSView {
     var mode: Overlay.Mode = .idle { didSet { needsLayout = true } }
     /// Horizontal pill (top/bottom): bars stack vertically and grow sideways. Vertical pill: the reverse.
     var horizontal = true { didSet { needsLayout = true } }
+    /// Mouse is over the pill while idle: brighter bars and border.
+    var hover = false {
+        didSet {
+            guard hover != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.18)
+            render()
+            CATransaction.commit()
+        }
+    }
+    var onHover: ((Bool) -> Void)?
+    var onClick: (() -> Void)?
 
     static let count = 9
+    static let weights: [CGFloat] = [0.35, 0.55, 0.8, 0.95, 1.0, 0.95, 0.8, 0.55, 0.35]
     private let capsule = CALayer()
     private let bars: [CALayer] = (0..<PillView.count).map { _ in CALayer() }
     private var heights = [CGFloat](repeating: 0, count: PillView.count)
@@ -283,7 +442,14 @@ final class PillView: NSView {
             b.shadowOffset = .zero
             capsule.addSublayer(b)
         }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
     }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { onClick?() }
 
     required init?(coder: NSCoder) { fatalError() }
 
@@ -300,7 +466,7 @@ final class PillView: NSView {
     /// Advance the animation one frame. `level` is the smoothed-by-us mic level 0...1.
     func tick(level: CGFloat) {
         phase += 0.28
-        let weights: [CGFloat] = [0.35, 0.55, 0.8, 0.95, 1.0, 0.95, 0.8, 0.55, 0.35]
+        let weights = PillView.weights
         let maxH = (horizontal ? capsule.bounds.height : capsule.bounds.width) - 6
         for i in 0..<PillView.count {
             var target: CGFloat
@@ -320,7 +486,7 @@ final class PillView: NSView {
     private func render(level: CGFloat = 0) {
         let active = mode != .idle
         let thick: CGFloat = 2
-        let gap: CGFloat = active ? 2.5 : 2
+        let gap: CGFloat = active || hover ? 2.5 : 2
         let n = CGFloat(PillView.count)
         let total = n * thick + (n - 1) * gap
         // Horizontal pill: bars stand side by side along x and grow up/down. Vertical pill: the same, rotated.
@@ -329,16 +495,17 @@ final class PillView: NSView {
         let start = (along - total) / 2
         let glowLevel: CGFloat = mode == .listening ? level : (mode == .processing ? 0.4 : 0)
         for (i, b) in bars.enumerated() {
-            let len = active ? min(max(heights[i], 2), cross - 4) : 2
+            // Hovered while idle: a calm, still waveform that says "ready".
+            let len = active ? min(max(heights[i], 2), cross - 4) : (hover ? min(3 + 7 * PillView.weights[i], cross - 8) : 2)
             let c = start + CGFloat(i) * (thick + gap)
             let o = (cross - len) / 2
             b.frame = horizontal ? NSRect(x: c, y: o, width: thick, height: len) : NSRect(x: o, y: c, width: len, height: thick)
             b.cornerRadius = thick / 2
-            b.opacity = active ? 1 : 0.35
+            b.opacity = active ? 1 : (hover ? 0.8 : 0.35)
             b.shadowOpacity = Float(active ? 0.6 + 0.4 * glowLevel : 0)
             b.shadowRadius = 2 + glowLevel * 5
         }
-        capsule.borderColor = (active ? glow.withAlphaComponent(0.35 + 0.5 * glowLevel) : NSColor(white: 1, alpha: 0.12)).cgColor
+        capsule.borderColor = (active ? glow.withAlphaComponent(0.35 + 0.5 * glowLevel) : NSColor(white: 1, alpha: hover ? 0.3 : 0.12)).cgColor
         capsule.shadowColor = glow.cgColor
         capsule.shadowOpacity = Float(active ? 0.35 + 0.65 * glowLevel : 0)
         capsule.shadowRadius = 4 + glowLevel * 8

@@ -48,6 +48,7 @@ final class App: NSObject, NSApplicationDelegate {
         overlay.position = iconPosition
         overlay.idleVisible = floatingEnabled
         recorder.onLevel = { [weak self] in self?.overlay.setLevel($0) }
+        overlay.onClick = { [weak self] in self?.pillClicked() }
         setIcon("mic")
         let menu = NSMenu()
         hotkeyHeader = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
@@ -162,15 +163,33 @@ final class App: NSObject, NSApplicationDelegate {
             notify("Microphone access was denied. Open System Settings > Privacy & Security > Microphone, turn WisprLite on, then relaunch.")
             return
         }
-        do { try recorder.start() } catch { notify("Mic error: \(error.localizedDescription)"); return }
+        // Show the pill first so it appears the moment the key goes down; the mic engine starts off the main thread.
         recording = true
+        setIcon("mic.fill")
+        recorder.start { [weak self] error in
+            guard let self, self.recording else { return }
+            self.recording = false
+            self.recorder.cancel()
+            self.setIcon("mic")
+            self.notify("Mic error: \(error.localizedDescription)")
+        }
     }
 
-    /// Shows the pill and plays the start sound. Called once a press is a hold or a lock, not on every tap.
+    /// Plays the start sound. Called once a press is a hold or a lock, not on every tap.
     private func showListening() {
         guard recording else { return }
-        setIcon("mic.fill")
         Sounds.play(Sounds.start)
+    }
+
+    /// Clicking the floating pill toggles a dictation: first click starts listening, the next stops and pastes.
+    private func pillClicked() {
+        if recording {
+            hotkey.keyCode = hotkey.keyCode   // clear a hotkey double-tap lock so the next key press starts fresh
+            finishRecording()
+        } else {
+            startRecording()
+            showListening()
+        }
     }
 
     private func cancelRecording() {
