@@ -48,6 +48,7 @@ final class App: NSObject, NSApplicationDelegate {
         overlay.position = iconPosition
         overlay.idleVisible = floatingEnabled
         recorder.onLevel = { [weak self] in self?.overlay.setLevel($0) }
+        overlay.onClick = { [weak self] in self?.pillClicked() }
         setIcon("mic")
         let menu = NSMenu()
         hotkeyHeader = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
@@ -171,6 +172,17 @@ final class App: NSObject, NSApplicationDelegate {
         guard recording else { return }
         setIcon("mic.fill")
         Sounds.play(Sounds.start)
+    }
+
+    /// Clicking the floating pill toggles a dictation: first click starts listening, the next stops and pastes.
+    private func pillClicked() {
+        if recording {
+            hotkey.keyCode = hotkey.keyCode   // clear a hotkey double-tap lock so the next key press starts fresh
+            finishRecording()
+        } else {
+            startRecording()
+            showListening()
+        }
     }
 
     private func cancelRecording() {
